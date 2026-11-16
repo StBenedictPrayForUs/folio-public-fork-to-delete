@@ -10,7 +10,27 @@ import { readerPage } from "./reader-page.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
-const { PDFDocument } = require("pdf-lib");
+const { PDFDocument, rgb } = require("pdf-lib");
+const fontkit = require("@pdf-lib/fontkit");
+
+/** A page whose letters are drawn as filled outlines, with no text in the PDF at all (like a print with outlined fonts). */
+async function outlinedLettersPdf(lines) {
+  const font = fontkit.create(readFileSync(require.resolve("dejavu-fonts-ttf/ttf/DejaVuSans.ttf")));
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([612, 792]);
+  const size = 14, scale = size / font.unitsPerEm;
+  lines.forEach((line, row) => {
+    let x = 72;
+    const y = 720 - row * 24;
+    for (const glyph of font.layout(line).glyphs) {
+      // fontkit's glyph space has y up and drawSvgPath expects SVG's y down, so flip the outline first.
+      const d = glyph.path.scale(1, -1).toSVG();
+      if (d) page.drawSvgPath(d, { x, y, scale, color: rgb(0, 0, 0) });
+      x += glyph.advanceWidth * scale;
+    }
+  });
+  return Buffer.from(await pdf.save());
+}
 const env = { ...process.env, FOLIO_TEST_USER_DATA: mkdtempSync(path.join(tmpdir(), "folio-rotate-")),
   FOLIO_TEST_HIDDEN: process.env.FOLIO_SMOKE_SHOW === "1" ? "0" : "1" };
 delete env.ELECTRON_RUN_AS_NODE;
@@ -18,6 +38,21 @@ const app = await electron.launch({ executablePath: electronPath(env), args: [ro
 try {
   const page = readerPage(await app.firstWindow());
   await page.getByRole("button", { name: /Try a sample/ }).waitFor({ timeout: 30_000 });
+
+  // Letters drawn as shapes: no embedded text and no picture, so only their drawing marks them as words.
+  const outlined = await outlinedLettersPdf(["PATIENT OXYGEN ORDER", "Liquid oxygen two liters per minute", "Signed by the physician on file"]);
+  await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name: "Outlined letters.pdf", data: Buffer.from(data) }), [...outlined]);
+  await page.window.waitForFunction(() => document.title.startsWith("Outlined letters.pdf"));
+  assert.equal(await page.evaluate(async bytes => {
+    const task = pdfjsLib.getDocument({ data: Uint8Array.from(bytes) });
+    try { return (await (await (await task.promise).getPage(1)).getTextContent()).items.length; }
+    finally { await task.destroy(); }
+  }, [...outlined]), 0, "the test page has no embedded text");
+  await page.locator('.page[data-page-number="1"] .textLayer').getByText(/OXYGEN/).waitFor({ timeout: 90_000 });
+  const words = (await page.locator('.page[data-page-number="1"] .textLayer').innerText()).replace(/\s+/g, " ");
+  assert.match(words, /Liquid oxygen two liters per minute Signed by the physician on file/);
+  console.log("ok  letters drawn as outlines are recognized");
 
   // Two scanned pages: one upright, one whose text runs bottom to top (it needs a clockwise turn).
   const scans = await page.evaluate(() => [false, true].map(sideways => {

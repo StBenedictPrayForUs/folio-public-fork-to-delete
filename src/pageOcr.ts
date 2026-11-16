@@ -21,11 +21,30 @@ async function hasPageImage(page: PDFPageProxy) {
   return fnArray.some(op => IMAGE_OPS.has(op));
 }
 
-async function readWords(page: PDFPageProxy, worker: OcrWorker, signal: AbortSignal): Promise<ReturnType<typeof toItems>> {
+/** Path numbers (coordinates and drawing codes) above this mean a page draws more than rules and boxes:
+ * letters drawn as outlines take thousands even for a few lines, while a ruled form takes a few hundred. */
+export const VECTOR_TEXT_PATH_DATA = 1500;
+
+/** How much path data a page draws, counted from pdf.js's operator list. */
+async function pathData(page: PDFPageProxy) {
+  const { fnArray, argsArray } = await page.getOperatorList({ annotationMode: AnnotationMode.DISABLE });
+  let total = 0;
+  for (let i = 0; i < fnArray.length && total < VECTOR_TEXT_PATH_DATA; i++) {
+    if (fnArray[i] !== OPS.constructPath) continue;
+    // [paint operator, [path data], bounds]; older pdf.js passed the path's operators and arguments separately.
+    const data = (argsArray[i] as unknown[])?.[1] as ArrayLike<unknown> | undefined;
+    const first = data?.[0] as ArrayLike<number> | number | undefined;
+    total += typeof first === "object" && first ? first.length : data?.length ?? 0;
+  }
+  return total;
+}
+
+async function readWords(page: PDFPageProxy, worker: OcrWorker, signal: AbortSignal, dpi = 216): Promise<ReturnType<typeof toItems>> {
   signal.throwIfAborted();
   // Read at a consistent resolution even in fit-page mode. Bound both dimensions on oversized scans.
+  // (216 DPI is scale 3: the usual reading for scans. Pages of outlined letters get 300 DPI; they render without noise.)
   const base = page.getViewport({ scale: 1 });
-  const scale = Math.min(3, 2400 / Math.max(base.width, base.height));
+  const scale = Math.min(dpi / 72, (dpi > 216 ? 3400 : 2400) / Math.max(base.width, base.height));
   const viewport = page.getViewport({ scale });
   const canvas = document.createElement("canvas");
   canvas.width = Math.ceil(viewport.width);
@@ -139,8 +158,15 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, language
       const native = await sparseNativeText(page, signal);
       if (!native) return;
       signal.throwIfAborted();
-      if (!(await hasPageImage(page))) return;
-      const scan = await isScanLike(native.length, textCover(native, page.view as Box), async () => {
+      const sparse = textCover(native, page.view as Box) < SCAN_TEXT_COVER;
+      let outlined = false;
+      if (!(await hasPageImage(page))) {
+        // No picture, so not a scan. But some PDFs draw their letters as shapes instead of text (a "print to PDF"
+        // that outlined its fonts): little or no real text and a lot of drawing means words to read.
+        if (!sparse || await pathData(page) < VECTOR_TEXT_PATH_DATA) return;
+        outlined = true;
+      }
+      const scan = outlined || await isScanLike(native.length, textCover(native, page.view as Box), async () => {
         const { fnArray, argsArray } = await page!.getOperatorList({ annotationMode: AnnotationMode.DISABLE });
         return imageCover(fnArray, argsArray, OPS, page!.view as Box);
       });
@@ -153,7 +179,7 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, language
       recognizing = true;
       if (n === viewer.currentPageNumber) updateStatus();
       worker ??= startOcrWorker(signal, languages).catch(error => { workerStartFailed = true; missingPackMessage = error instanceof MissingScanPack ? error.message : undefined; throw error; });
-      const items = await readWords(page, await worker, signal);
+      const items = await readWords(page, await worker, signal, outlined ? 300 : 216);
       const newItems = dropDuplicates(items, native.map(boxOf));
       signal.throwIfAborted();
       if (newItems.length && session) {
