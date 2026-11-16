@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import path from "node:path";
+import { toolIs, useTool } from "./reader-page.mjs";
 
 export async function checkSignatureTargets(app, page, photo, shots) {
   const pdf = await PDFDocument.create();
@@ -16,7 +17,7 @@ export async function checkSignatureTargets(app, page, photo, shots) {
     "folio:open-file", { name: "Signature captions.pdf", data: Buffer.from(data) }), Array.from(await pdf.save()));
   await page.window.waitForFunction(() => document.title.startsWith("Signature captions.pdf"));
   await page.locator(".textLayer span:not(.markedContent)").first().waitFor();
-  await page.getByTitle("Add a signature").click();
+  await useTool(page, "Sign");
   await page.getByLabel("Upload signature photo").setInputFiles({ name: "mark.png", mimeType: "image/png", buffer: Buffer.from(photo, "base64") });
   await page.getByRole("button", { name: /Use this signature/ }).click();
   const placement = page.getByLabel("Signature placement", { exact: true });

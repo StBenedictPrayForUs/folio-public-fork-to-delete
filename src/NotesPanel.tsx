@@ -12,7 +12,7 @@ interface Props {
   onNote: (id: string, note: string) => void;
   onRemove: (id: string) => void;
   onDocNote: (note: string) => void;
-  onAsk: (mark: Mark) => void;
+  onAsk?: (mark: Mark) => void;
 }
 
 /** Commits text after the reader pauses typing (and on blur), so every keystroke isn't a save. */
@@ -103,7 +103,7 @@ function MarkCard({ mark, onReveal, onNote, onRemove, onAsk }: {
   onReveal: (id: string) => void;
   onNote: (id: string, note: string) => void;
   onRemove: (id: string) => void;
-  onAsk: (mark: Mark) => void;
+  onAsk?: (mark: Mark) => void;
 }) {
   const note = useDebouncedField(mark.note, (v) => onNote(mark.id, v.trim()));
   return (
@@ -116,7 +116,7 @@ function MarkCard({ mark, onReveal, onNote, onRemove, onAsk }: {
         <GrowingTextarea className="mark-note" placeholder="Add a note…" aria-label="Note" rows={1} {...note} />
       )}
       <div className="mark-actions">
-        {mark.type === "highlight" && (
+        {mark.type === "highlight" && onAsk && (
           <button className="pill-btn" onClick={() => onAsk(mark)} title="Ask AI about this highlight" aria-label="Ask AI about this highlight">
             <Icon name="sparkle" size={14} />
           </button>

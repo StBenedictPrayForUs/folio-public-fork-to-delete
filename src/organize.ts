@@ -1,5 +1,5 @@
-/** A page of the organized copy. */
-export interface DraftPage { page: number }
+/** A page of the organized copy. `turn` is extra clockwise quarter-turns (0–3) saved into the copy. */
+export interface DraftPage { page: number; turn?: number }
 
 export interface PageDraft {
   pages: DraftPage[];
@@ -15,7 +15,11 @@ export const startDraft = (count: number): PageDraft =>
   ({ pages: Array.from({ length: count }, (_, i) => ({ page: i + 1 })), undo: [], redo: [] });
 
 export const draftChanged = (draft: PageDraft, count: number) =>
-  draft.pages.length !== count || draft.pages.some((p, i) => p.page !== i + 1);
+  draft.pages.length !== count || draft.pages.some((p, i) => p.page !== i + 1 || !!p.turn);
+
+/** Turns the chosen pages a quarter clockwise (1) or counterclockwise (-1). */
+export const rotatePages = (pages: readonly DraftPage[], keys: ReadonlySet<string>, delta: 1 | -1) =>
+  pages.map(p => keys.has(pageKey(p)) ? { ...p, turn: (((p.turn ?? 0) + delta) % 4 + 4) % 4 } : p);
 
 export const withPages = (draft: PageDraft, pages: DraftPage[]): PageDraft =>
   ({ pages, undo: [...draft.undo, draft.pages], redo: [] });

@@ -22,7 +22,7 @@
   --shadow-lg: 0 2px 6px rgba(20, 18, 14, 0.06), 0 24px 60px -12px rgba(20, 18, 14, 0.28);
   --page-shadow: 0 0 0 1px rgba(20, 18, 14, 0.05), 0 2px 4px rgba(20, 18, 14, 0.04), 0 10px 30px -8px rgba(20, 18, 14, 0.16);
 
-  --topbar-h: 52px;
+  --topbar-h: 40px;
   --sidebar-w: 264px;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 
@@ -122,36 +122,37 @@ kbd {
 .document-reader.active { visibility: visible; }
 .window-drag-area { position: absolute; top: 0; pointer-events: none; -webkit-app-region: drag; }
 .window-drag-area span { position: absolute; inset-block: 0; -webkit-app-region: no-drag; }
+/* Document tabs live in the top bar itself, like a browser's tab strip. */
 .document-tabs {
   display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px 0;
-  background: var(--stage);
-  border-bottom: 1px solid var(--line);
-  flex: none;
-  z-index: 12;
+  align-items: flex-end;
+  align-self: stretch;
+  gap: 2px;
+  min-width: 0;
+  flex: 0 1 auto;
+  padding-left: 4px;
 }
-.document-tab-list { display: flex; min-width: 0; gap: 3px; overflow-x: auto; scrollbar-width: thin; }
+.document-tab-list { display: flex; align-items: flex-end; min-width: 0; gap: 2px; overflow-x: auto; scrollbar-width: none; }
 .document-tab {
   display: flex;
   align-items: center;
-  max-width: 200px;
-  min-width: 96px;
-  border-radius: 8px 8px 0 0;
+  max-width: 220px;
+  min-width: 90px;
+  height: 33px;
+  border-radius: 7px 7px 0 0;
   color: var(--text-2);
 }
 .document-tab:hover { background: var(--hover); }
-.document-tab.selected { background: var(--surface); box-shadow: inset 0 2px var(--accent); color: var(--text); }
+.document-tab.selected { background: var(--stage); box-shadow: inset 0 2px var(--accent); color: var(--text); }
 .document-tab [role=tab] {
   display: flex;
   align-items: center;
   gap: 7px;
-  height: 36px;
+  height: 100%;
   padding: 0 4px 0 10px;
   min-width: 0;
   flex: 1;
-  font-size: 13px;
+  font-size: 12.5px;
 }
 .document-tab [role=tab] svg { flex: none; }
 .document-tab.selected [role=tab] { font-weight: 600; }
@@ -159,13 +160,12 @@ kbd {
 .document-tab [role=tab] span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .document-tab button:focus-visible, .new-document-tab:focus-visible { outline-offset: -3px; }
 .close-document-tab {
-  display: grid; place-items: center; flex: none; width: 25px; height: 25px; margin-right: 4px; border-radius: 5px;
+  display: grid; place-items: center; flex: none; width: 22px; height: 22px; margin-right: 5px; border-radius: 5px;
 }
 .close-document-tab:hover { background: var(--active); }
 .close-document-tab:has(.dirty-dot) svg, .close-document-tab:is(:hover,:focus-visible) .dirty-dot { display: none; }
 .close-document-tab:is(:hover,:focus-visible) svg { display: block; }
-.new-document-tab { align-self: center; margin-bottom: 2px; }
-.app:has(.document-tabs) .welcome, .app:has(.document-tabs) .loading-bar { top: calc(var(--topbar-h) + 41px); }
+.new-document-tab { align-self: center; flex: none; }
 
 .app {
   height: 100%;
@@ -176,28 +176,20 @@ kbd {
 .topbar {
   height: var(--topbar-h);
   flex: none;
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 10px 0 14px;
+  gap: 2px;
+  padding: 0 6px;
   background: var(--bg);
   border-bottom: 1px solid var(--line);
   position: relative;
   z-index: 20;
   transition: margin-top 0.3s var(--ease), opacity 0.2s;
 }
-
-.topbar-left,
-.topbar-right {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  min-width: 0;
-}
-.topbar-right {
-  justify-content: flex-end;
-}
+.topbar .icon-btn { flex: none; }
+/* Empty title bar space: drag the window from here. */
+.topbar-spacer { flex: 1 1 32px; min-width: 32px; align-self: stretch; }
+.icon-btn.menu-trigger { width: auto; display: flex; align-items: center; gap: 1px; padding: 0 5px 0 8px; }
 
 .brand {
   display: flex;
@@ -316,7 +308,7 @@ kbd {
 /* Desktop app: the top bar doubles as the window title bar (Windows draws min/max/close on the right). */
 .desktop .topbar {
   -webkit-app-region: drag;
-  padding-right: 150px;
+  padding-right: 142px;
 }
 .desktop .topbar button,
 .desktop .segmented {
@@ -1692,3 +1684,6 @@ kbd {
 .image-corner.nw, .image-corner.se { cursor: nwse-resize; }
 .image-corner.ne, .image-corner.sw { cursor: nesw-resize; }
 .folio-place-actions { position: absolute; z-index: 11; left: 50%; bottom: 76px; transform: translateX(-50%); display: flex; gap: 6px; padding: 5px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); box-shadow: var(--shadow-sm); }
+
+/* Counterclockwise rotate: the clockwise icon, mirrored. */
+.mirror { display: inline-flex; transform: scaleX(-1); }

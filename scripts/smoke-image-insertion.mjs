@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { degrees, PDFDocument, rgb, StandardFonts } from "pdf-lib";
+import { toolIs, useTool } from "./reader-page.mjs";
 
 export async function imagePlacementPdf() {
   const pdf = await PDFDocument.create();
@@ -20,7 +21,7 @@ export async function checkImageInsertion(app, page, folder, shots) {
     { name, bytes: Array.from(bytes) });
   await open("Field notes.pdf", await imagePlacementPdf());
   await page.window.waitForFunction(() => document.title.startsWith("Field notes.pdf"));
-  const edit = page.getByRole("button", { name: "Edit mode", exact: true });
+  const edit = { click: () => useTool(page, "Edit text and images") };
   await edit.click();
   const images = await page.evaluate(() => {
     const make = (width, height, type) => {
@@ -102,7 +103,7 @@ export async function checkImageInsertion(app, page, folder, shots) {
     }));
   },file);
   // Save while the pasted image is still selected.
-  await page.getByRole("button", { name: "Save copy", exact: true }).click();
+  await page.getByRole("button", { name: "Save edited copy", exact: true }).click();
   assert.equal(await app.evaluate(() => globalThis.savedImageCopy), "completed");
   const bytes = readFileSync(file);
   const bounds = await page.evaluate(async bytes => {

@@ -44,8 +44,8 @@ function isTrustedSender(event) {
 // Title bar colours follow the app theme (see src/styles.css --bg). Height is one pixel short of
 // --topbar-h so the toolbar's bottom border runs underneath the window controls.
 const TITLEBAR = {
-  dark: { color: "#171717", symbolColor: "#edece9", height: 51 },
-  light: { color: "#f5f4f1", symbolColor: "#1c1b19", height: 51 },
+  dark: { color: "#171717", symbolColor: "#edece9", height: 39 },
+  light: { color: "#f5f4f1", symbolColor: "#1c1b19", height: 39 },
 };
 
 const IS_MAC = process.platform === "darwin";
@@ -273,7 +273,7 @@ function createWindow() {
     titleBarStyle: "hidden",
     // macOS keeps its traffic lights (inset into the top bar); Windows and Linux draw their window
     // buttons as an overlay on the right.
-    ...(IS_MAC ? { trafficLightPosition: { x: 18, y: 18 } } : { titleBarOverlay: TITLEBAR[theme] }),
+    ...(IS_MAC ? { trafficLightPosition: { x: 14, y: 13 } } : { titleBarOverlay: TITLEBAR[theme] }),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,

@@ -3,10 +3,11 @@ import { Icon, type IconName } from "./icons";
 
 export type MoreItem =
   | { kind: "action"; icon: IconName; label: string; shortcut?: string; disabled?: boolean; onSelect: () => void }
-  | { kind: "toggle"; icon: IconName; label: string; checked: boolean; onSelect: () => void }
+  | { kind: "toggle"; icon: IconName; label: string; checked: boolean; shortcut?: string; onSelect: () => void }
   | { kind: "divider" };
 
-export function MoreMenu({ items, label }: { items: MoreItem[]; label?: string }) {
+/** `icon` turns the trigger into a compact toolbar button: that icon and a small chevron. */
+export function MoreMenu({ items, label, icon, active }: { items: MoreItem[]; label?: string; icon?: IconName; active?: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -30,14 +31,15 @@ export function MoreMenu({ items, label }: { items: MoreItem[]; label?: string }
   return (
     <div className="more" ref={ref}>
       <button
-        className={label ? "link small" : `icon-btn ${open ? "on" : ""}`}
+        className={icon ? `icon-btn menu-trigger ${open || active ? "on" : ""}` : label ? "link small" : `icon-btn ${open ? "on" : ""}`}
         onClick={() => setOpen(!open)}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={label ?? "More"}
         title={label ?? "More"}
       >
-        {label ? <>{label}<Icon name="chevronDown" size={13} /></> : <Icon name="more" />}
+        {icon ? <><Icon name={icon} size={16} /><Icon name="chevronDown" size={11} /></>
+          : label ? <>{label}<Icon name="chevronDown" size={13} /></> : <Icon name="more" />}
       </button>
       {open && (
         <div className="menu dropdown" role="menu">
@@ -58,7 +60,7 @@ export function MoreMenu({ items, label }: { items: MoreItem[]; label?: string }
                 <Icon name={item.icon} size={15} />
                 <span className="menu-label">{item.label}</span>
                 {item.kind === "toggle" && item.checked && <Icon name="check" size={14} />}
-                {item.kind === "action" && item.shortcut && <kbd className="menu-kbd">{item.shortcut}</kbd>}
+                {item.shortcut && <kbd className="menu-kbd">{item.shortcut}</kbd>}
               </button>
             ),
           )}

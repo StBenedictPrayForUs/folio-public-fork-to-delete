@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { electronPath } from "./electron-path.mjs";
-import { readerPage } from "./reader-page.mjs";
+import { readerPage, toolIs, useTool } from "./reader-page.mjs";
 import { checkReaderTools } from "./smoke-reader-tools.mjs";
 import { checkSignatureTargets } from "./smoke-signature-targets.mjs";
 import { checkOpenRouter } from "./smoke-openrouter.mjs";
@@ -101,6 +101,8 @@ try {
   assert.equal(await whatsNew.getByRole("heading", { name: "Folio 1.13.1", exact: true }).count(), 0);
   await page.keyboard.press("Escape");
   assert.equal(await page.getByRole("dialog").count(), 0);
+  // Ask AI is off until Settings turns it on; the checks below use it.
+  await page.evaluate(() => localStorage.setItem("folio:ai-enabled", "1"));
   await page.reload();
   await page.getByRole("button", { name: /Try a sample/ }).waitFor();
   assert.equal(await whatsNew.count(), 0, "reopening the same version doesn't repeat the popup");
@@ -140,22 +142,27 @@ try {
   await checkOpenRouter(app, page);
   await checkCustomEndpoint(app, page);
 
-  const toolbar = page.getByRole("toolbar", { name: "Tools" });
-  for (const name of ["Select", "Highlight", "Draw", "Text", "Sign", "Edit mode"]) await toolbar.getByRole("button", { name, exact: true }).waitFor();
-  await toolbar.getByRole("button", { name: "Edit mode", exact: true }).click();
-  await toolbar.getByRole("button", { name: "Highlight", exact: true }).waitFor();
-  await toolbar.getByRole("button", { name: "Exit edit mode", exact: true }).click();
+  // The annotation tools live in the top bar's Tools menu.
+  await page.locator(".topbar").getByRole("button", { name: "Tools", exact: true }).click();
+  for (const name of ["Select", "Highlight selected text", "Draw", "Text", "Sign", "Edit text and images"]) {
+    await page.locator('.menu.dropdown [role^="menuitem"]').filter({ hasText: new RegExp("^" + name) }).first().waitFor();
+  }
+  await page.keyboard.press("Escape");
+  await useTool(page, "Edit text and images");
+  await page.locator(".app[data-content-edit]").waitFor();
+  await useTool(page, "Edit text and images");
+  await page.waitForFunction(() => !document.querySelector(".app[data-content-edit]"));
 
   const docs = page.getByRole("tablist", { name: "Open documents" });
-  assert.equal(await page.locator(".document-tabs").count(), 0);
+  assert.equal(await docs.getByRole("tab").count(), 1);
   await page.getByRole("button", { name: "More", exact: true }).click();
   await page.getByRole("menuitem", { name: /New tab/ }).click();
   await docs.getByRole("tab", { name: "Library", selected: true }).waitFor();
   assert.equal(await docs.getByRole("tab").count(), 2);
   await docs.getByRole("button", { name: "Close Library" }).click();
-  await page.locator(".doc-title", { hasText: "Folio sample.pdf" }).waitFor();
-  assert.equal(await page.locator(".document-tabs").count(), 0);
-  console.log("ok  the tab strip appears for a second tab and disappears when one remains");
+  await docs.getByRole("tab", { name: "Folio sample.pdf", selected: true }).waitFor();
+  assert.equal(await docs.getByRole("tab").count(), 1);
+  console.log("ok  the top bar's tab strip adds and closes tabs");
 
   const sidebarToggle = page.getByRole("button", { name: /Toggle sidebar/ });
   const sidebarWasOpen = await sidebarToggle.getAttribute("aria-pressed") === "true";
@@ -208,7 +215,7 @@ try {
     g.stroke();
     return canvas.toDataURL("image/png").split(",")[1];
   });
-  await page.getByTitle("Add a signature").click();
+  await useTool(page, "Sign");
   await page.locator('input[aria-label="Upload signature photo"]').setInputFiles({ name: "signature.png", mimeType: "image/png", buffer: Buffer.from(photo, "base64") });
   await page.getByRole("button", { name: /Use this signature/ }).click();
   await page.locator('select[aria-label="Signature placement"]').selectOption("manual");
@@ -291,7 +298,7 @@ try {
     const close = docs.getByRole("button", { name: "Close " + name, exact: true });
     await close.click(); await close.waitFor({ state: "detached" });
   }
-  await page.locator(".doc-title", { hasText: "Another.pdf" }).waitFor();
+  await docs.getByRole("tab", { name: "Another.pdf", selected: true }).waitFor();
   await page.getByRole("button", { name: "More", exact: true }).click();
   await page.getByRole("menuitem", { name: /Close document/ }).click();
   await page.getByRole("button", { name: /Try a sample/ }).click();
@@ -300,11 +307,11 @@ try {
 
   const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
   await page.window.setViewportSize({ width: 420, height: viewport.height });
-  assert.ok(await page.locator(".topbar button").evaluateAll(buttons => buttons.every(button => {
+  assert.ok(await page.locator(".topbar button:not(.document-tab-list button)").evaluateAll(buttons => buttons.every(button => {
     const rect = button.getBoundingClientRect();
     return button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
   })), "a toolbar button is covered at the minimum width");
-  await page.getByRole("button", { name: "Highlight", exact: true }).click();
+  await useTool(page, "Highlight selected text");
   await page.window.setViewportSize(viewport);
   const textLayer = page.locator('.page[data-page-number="1"] .textLayer.highlighting');
   await textLayer.waitFor();
@@ -336,11 +343,11 @@ try {
   await page.waitForFunction(() => document.querySelectorAll(".highlightEditor").length === 2);
   assert.equal(await page.locator(".selection-popover").count(), 0);
   await page.getByRole("button", { name: "Done", exact: true }).click();
-  await page.getByRole("button", { name: "Select", pressed: true }).waitFor();
+  await toolIs(page, "select");
   await textLayer.waitFor({ state: "detached" });
   console.log("ok  Highlight mode marks consecutive selections on release in the chosen color");
 
-  await page.getByTitle("Draw (D)").click();
+  await useTool(page, "Draw");
   const drawingTool = page.getByLabel("Drawing tool");
   const inkPage = page.locator('.page[data-page-number="1"]');
   await inkPage.locator(".annotationEditorLayer.inkEditing").waitFor();
@@ -608,7 +615,7 @@ try {
   const pageField = page.getByLabel("Page number", { exact: true });
   await pageField.fill("1");
   await pageField.press("Enter");
-  await page.locator('button[title^="Text ("]').click();
+  await useTool(page, "Text");
   // Clicked in the middle of the page's visible part: a fixed spot near the top lands under the toolbar's color
   // picker in a small window, as on CI runners.
   await page.locator('.page[data-page-number="1"] .annotationEditorLayer').click();
@@ -616,7 +623,7 @@ try {
   await page.locator('.freeTextEditor .internal[contenteditable="true"]').fill("Saved text box");
   const textBox = page.locator('.freeTextEditor .internal[contenteditable="true"]');
   await textBox.click();
-  assert.equal(await toolbar.getByRole("button", { name: "Text", exact: true }).getAttribute("aria-pressed"), "true",
+  assert.equal(await page.evaluate(() => document.querySelector(".app").getAttribute("data-tool")), "freetext",
     "clicking inside the text box keeps Text active");
   const sheet = page.locator('.page[data-page-number="1"]');
   await sheet.click({ position: { x: 30, y: 150 } });
@@ -627,19 +634,19 @@ try {
   assert.equal(await page.locator(".freeTextEditor").innerText(), "Saved text box");
 
   // A deliberately armed Text tool creates another box; abandoning it removes only that empty box.
-  await toolbar.getByRole("button", { name: "Text", exact: true }).click();
+  await useTool(page, "Text");
   await sheet.locator(".annotationEditorLayer").click({ position: { x: 60, y: 210 } });
   await page.locator('.freeTextEditor .internal[contenteditable="true"]').waitFor();
   await sheet.click({ position: { x: 30, y: 150 } });
   await page.waitForFunction(() => document.querySelector('.app')?.getAttribute('data-tool') === 'select');
   assert.equal(await page.locator(".freeTextEditor").count(), 1, "clicking away removes an empty box");
-  await toolbar.getByRole("button", { name: "Text", exact: true }).click();
+  await useTool(page, "Text");
   await sheet.locator(".annotationEditorLayer").click({ position: { x: 60, y: 210 } });
   await page.locator('.freeTextEditor .internal[contenteditable="true"]').fill("Another text box");
   const anotherBox = page.locator(".freeTextEditor", { hasText: "Another text box" });
   const originalColor = await anotherBox.locator(".internal").evaluate(element => element.style.color);
   await page.getByRole("toolbar", { name: "Annotation options" }).getByRole("radio").last().click();
-  assert.equal(await toolbar.getByRole("button", { name: "Text", exact: true }).getAttribute("aria-pressed"), "true",
+  assert.equal(await page.evaluate(() => document.querySelector(".app").getAttribute("data-tool")), "freetext",
     "formatting does not exit the Text tool");
   await sheet.click({ position: { x: 30, y: 150 } });
   await page.waitForFunction(() => document.querySelector('.app')?.getAttribute('data-tool') === 'select');
@@ -820,7 +827,7 @@ try {
   const neighbor = path.join(folder, "Quarterly report.pdf");
   writeFileSync(neighbor, Buffer.from(sample));
   const openWordDocument = async (expectedName) => {
-    await page.getByTitle("Back to library").click();
+    await page.getByRole("button", { name: "New tab", exact: true }).click();
     const chooser = page.waitForEvent("filechooser");
     await page.getByRole("button", { name: /Open a PDF/ }).click();
     await (await chooser).setFiles(docx);

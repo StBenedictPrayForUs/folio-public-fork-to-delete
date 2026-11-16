@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
 import ocrCatalog from "../electron/ocr-models.json" with { type: "json" };
+import { toolIs, useTool } from "./reader-page.mjs";
 
 // A two-page form with a text field on its first page.
 function formPdf() {
@@ -274,7 +275,7 @@ async function checkPenDrawing(app, page, folder, shots) {
   await app.evaluate(({ BrowserWindow }, pdf) => BrowserWindow.getAllWindows()[0].webContents.send(
     "folio:open-file", { name: "Pen widths.pdf", data: Buffer.from(pdf) }), blank);
   await page.window.waitForFunction(() => document.title.startsWith("Pen widths.pdf"));
-  await page.getByTitle("Draw (D)").click();
+  await useTool(page, "Draw");
   const width = page.getByRole("combobox", { name: "Pen width" });
   const layer = page.locator(".page .annotationEditorLayer.inkEditing");
   await layer.waitFor();
@@ -380,17 +381,17 @@ async function checkContentEditing(app, page, folder, shots) {
   await page.getByRole("tab", { name: "Pages", exact: true }).click();
   await page.getByRole("button", { name: "Bookmark page 2", exact: true }).click();
   const openEditor = async () => {
-    await page.getByRole("button", { name: "Edit mode", exact: true }).click();
+    await useTool(page, "Edit text and images");
     assert.equal(await page.getByRole("dialog").count(), 0);
   };
   const sheet = page.locator('.page[data-page-number="1"]');
   const item = name => sheet.getByRole("button", { name, exact: true });
   const input = sheet.getByRole("textbox", { name: "Edit text on page" });
-  const save = page.getByRole("button", { name: "Save copy", exact: true });
+  const save = page.getByRole("button", { name: "Save edited copy", exact: true });
   const uneditedLine = sheet.locator(".textLayer").getByText("Original", { exact: true }).first();
   await uneditedLine.waitFor();
   await page.screenshot({ path: path.join(shots, "before-pdf-edit.png") });
-  await page.getByRole("button", { name: "Highlight", exact: true }).click();
+  await useTool(page, "Highlight selected text");
   await page.keyboard.down("Shift");
   await uneditedLine.evaluate(span => {
     const text = span.firstChild;
@@ -433,8 +434,8 @@ async function checkContentEditing(app, page, folder, shots) {
     return canvas.toDataURL().split(",")[1];
   });
   await sheet.getByLabel("Replacement image").setInputFiles({ name: "blue.png", mimeType: "image/png", buffer: Buffer.from(png, "base64") });
-  await page.getByRole("button", { name: "Exit edit mode" }).click();
-  await page.getByRole("button", { name: "Edit mode", exact: true }).waitFor();
+  await useTool(page, "Edit text and images");
+  await page.waitForFunction(() => !document.querySelector(".app[data-content-edit]"));
   assert.equal(await sheet.locator(".folio-content-layer").count(), 0);
   await openEditor();
   const file = path.join(folder, "edited.pdf");
@@ -535,7 +536,7 @@ async function checkRightToLeftEditing(app, page, shots) {
   await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
     "folio:open-file", { name: "Right to left.pdf", data: Buffer.from(data) }), file);
   await page.window.waitForFunction(() => document.title.startsWith("Right to left.pdf"));
-  await page.getByRole("button", { name: "Edit mode", exact: true }).click();
+  await useTool(page, "Edit text and images");
   const sheet = page.locator('.page[data-page-number="1"]');
   const latin = sheet.getByRole("button", { name: "Latin", exact: true });
   const input = sheet.getByRole("textbox", { name: "Edit text on page" });
@@ -560,8 +561,8 @@ async function checkRightToLeftEditing(app, page, shots) {
   assert.equal(await input.count(), 0);
   await latin.waitFor();
   assert.equal(await locked.count(), 1);
-  await page.getByRole("button", { name: "Exit edit mode" }).click();
-  await page.getByRole("button", { name: "Edit mode", exact: true }).waitFor();
+  await useTool(page, "Edit text and images");
+  await page.waitForFunction(() => !document.querySelector(".app[data-content-edit]"));
   assert.equal(await page.getByRole("dialog").count(), 0);
   console.log("ok  Hebrew text remains protected in Edit mode");
 }
@@ -574,7 +575,7 @@ async function checkArabicEditing(app, page, folder, shots) {
     { name, bytes: Array.from(bytes) });
   await open("Arabic editing.pdf", source);
   await page.window.waitForFunction(() => document.title.startsWith("Arabic editing.pdf"));
-  const edit = page.getByRole("button", { name: "Edit mode", exact: true });
+  const edit = { click: () => useTool(page, "Edit text and images") };
   await edit.click();
   const sheet = page.locator('.page[data-page-number="1"]');
   const text = label => sheet.getByRole("button", { name: label, exact: true });
@@ -594,7 +595,7 @@ async function checkArabicEditing(app, page, folder, shots) {
   await text(greeting).waitFor();
   const file = path.join(folder, "arabic-copy.pdf");
   await captureDownload(app, file);
-  await page.getByRole("button", { name: "Save copy", exact: true }).click();
+  await page.getByRole("button", { name: "Save edited copy", exact: true }).click();
   assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
   const bytes = readFileSync(file);
   const extracted = await page.evaluate(async bytes => {
@@ -615,7 +616,7 @@ async function checkArabicEditing(app, page, folder, shots) {
   await input.press("Enter");
   await text("أهلا").waitFor();
   await captureDownload(app, path.join(folder, "arabic-edited-again.pdf"));
-  await page.getByRole("button", { name: "Save copy", exact: true }).click();
+  await page.getByRole("button", { name: "Save edited copy", exact: true }).click();
   assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
   console.log("ok  Arabic ligatures, diacritics, and numbers survive editing, saving, and reopening");
 }
@@ -922,12 +923,13 @@ async function checkOrganizePages(app, page, folder, shots) {
   const file = path.join(folder, "organized.pdf");
   await captureDownload(app, file);
   await organizer.getByRole("button", { name: "Save organized copy" }).click();
-  await organizer.getByRole("button", { name: "Open organized copy" }).waitFor();
   assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
   const copy = await readCopy(page, file);
   assert.deepEqual(copy.map(p => p.text), ["Fourth page", "First page", "Third page"]);
-  await organizer.getByRole("button", { name: "Done", exact: true }).click();
-  assert.deepEqual(await shown(), [1, 2, 3, 4]);
+  // The saved copy replaces the document in this tab, and the organizer closes.
+  await page.window.waitForFunction(() => document.title.includes("(organized).pdf"));
+  await organizer.waitFor({ state: "detached" });
+  assert.equal(await page.locator(".pdfViewer .page").count(), 3);
   console.log("ok  organizing pages deletes, undoes and redoes, keeps at least one page, and saves the chosen pages in order");
 }
 
@@ -1112,8 +1114,6 @@ export async function checkReaderTools(app, page, folder, shots) {
   const file = path.join(folder, "reordered.pdf");
   await captureDownload(app, file);
   await page.getByRole("button", { name: "Save organized copy" }).click();
-  const openCopy = page.getByRole("button", { name: "Open organized copy" });
-  await openCopy.waitFor();
   assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
   const result = await page.evaluate(async bytes => {
     const read = async data => {
@@ -1140,7 +1140,6 @@ export async function checkReaderTools(app, page, folder, shots) {
   assert.equal(reordered.bookmark, order.indexOf(original.bookmark));
   assert.ok(reordered.pages[2].marks.includes("FreeText") && reordered.pages[2].marks.includes("Highlight"));
   assert.ok(reordered.pages.at(-1).marks.includes("Highlight"));
-  await openCopy.click();
   await page.window.waitForFunction(() => document.title.includes("(organized).pdf"));
   console.log("ok  organized PDF pages, bookmark destinations and annotations match the sidebar order");
 
@@ -1172,13 +1171,13 @@ export async function checkReaderTools(app, page, folder, shots) {
   await page.getByRole("button", { name: "Move", exact: true }).click();
   await captureDownload(app, path.join(folder, "organized-form.pdf"));
   await page.keyboard.press("ControlOrMeta+s");
-  await openCopy.click();
   assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
   await page.window.waitForFunction(() => document.title.startsWith("Form (organized).pdf"));
-  await documents.getByRole("button", { name: "Close Form.pdf", exact: true }).waitFor();
-  await page.getByTitle("Next page").click();
+  // The copy opens where the reader was: the form page, now page 2.
+  await page.waitForFunction(() => document.querySelector('[aria-label="Page number"]')?.value === "2");
+  await page.locator('.page[data-page-number="2"] .textWidgetAnnotation input').waitFor();
   assert.equal(await page.locator('.page[data-page-number="2"] .textWidgetAnnotation input').inputValue(), "A filled field");
-  console.log("ok  the normal Save shortcut and Open organized copy preserve filled form fields");
+  console.log("ok  the normal Save shortcut reopens the organized copy with filled form fields");
   await checkScanSelection(app, page);
   await checkContentEditing(app, page, folder, shots);
   await checkImageInsertion(app, page, folder, shots);

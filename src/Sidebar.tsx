@@ -2,7 +2,7 @@ import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from "react-dom";
 import { renderThumbnail, type OutlineItem, type PDFDocumentProxy } from "./pdf";
 import { Icon } from "./icons";
-import { deletePages, draftChanged, movePage, pageKey, startDraft, stepDraft, withPages, type DraftPage, type PageDraft } from "./organize";
+import { deletePages, draftChanged, movePage, pageKey, rotatePages, startDraft, stepDraft, withPages, type DraftPage, type PageDraft } from "./organize";
 import { IS_MAC, keys } from "./platform";
 import { anchoredScrollTop, loadPageSizes, rowAt, thumbLayout, THUMB_ROW_EXTRA, type PageSize } from "./thumbnails";
 
@@ -27,7 +27,7 @@ interface Props {
 
 export type SidebarTab = "pages" | "outline" | "notes";
 
-type PageAction = "delete";
+type PageAction = "delete" | "rotate-cw" | "rotate-ccw";
 
 export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft, onDraft, onSaveDraft, onOpenCopy, onExportPages,
   tab, onTab: setTab, notes, noteCount, bookmarkedPages, onToggleBookmark }: Props) {
@@ -49,6 +49,8 @@ export function Sidebar({ pdf, page, rotation, onSelectPage, onSelectDest, draft
       const result = deletePages(start.pages, new Set(pick));
       next = withPages(start, result.pages);
       pick = [pageKey(result.next)];
+    } else if ((action === "rotate-cw" || action === "rotate-ccw") && pick) {
+      next = withPages(start, rotatePages(start.pages, new Set(pick), action === "rotate-cw" ? 1 : -1));
     }
     setOrganizerPick(pick);
     onDraft(next);
@@ -143,8 +145,8 @@ interface ThumbnailProps {
   onSelect: (n: number) => void;
 }
 
-/** A row of the thumbnail list: which page it shows, and its key in the organizer's draft. */
-interface ThumbRow { key: string; page: number }
+/** A row of the thumbnail list: which page it shows, its key in the organizer's draft, and any quarter-turns. */
+interface ThumbRow { key: string; page: number; turn?: number }
 
 // Ctrl-click (⌘-click on macOS) toggles a page, Shift-click selects the range from the anchor.
 // Returns null for a plain click, which selects just that page.
@@ -188,7 +190,7 @@ function PageOrganizer({ pdf, page, rotation, onSelect, draft, onDraft, onSave, 
     focus();
     return () => cancelAnimationFrame(frame);
   }, []);
-  const rows = useMemo(() => draft.pages.map((p): ThumbRow => ({ key: pageKey(p), page: p.page })), [draft.pages]);
+  const rows = useMemo(() => draft.pages.map((p): ThumbRow => ({ key: pageKey(p), page: p.page, turn: p.turn })), [draft.pages]);
   const rowKeys = useMemo(() => rows.map(row => row.key), [rows]);
   const selected = useMemo(() => rowKeys.filter(key => picked.has(key)), [rowKeys, picked]);
   const activeKey = anchor !== null && picked.has(anchor) && rowKeys.includes(anchor) ? anchor : selected[0];
@@ -221,6 +223,10 @@ function PageOrganizer({ pdf, page, rotation, onSelect, draft, onDraft, onSave, 
     const result = deletePages(draft.pages, new Set(selected));
     change(result.pages);
     choose([pageKey(result.next)]);
+  };
+  const rotate = (delta: 1 | -1) => {
+    if (saving || !selected.length) return;
+    change(rotatePages(draft.pages, new Set(selected), delta));
   };
   // Undo selects the pages it brings back, so the reader sees what returned.
   const step = (back: boolean) => {
@@ -264,11 +270,20 @@ function PageOrganizer({ pdf, page, rotation, onSelect, draft, onDraft, onSave, 
     <aside ref={ref} className="sidebar" aria-label="Organize pages">
       <div className="organize-head">
         <strong>Organize pages</strong>
-        <p>Drag a page to move it. {keys("Ctrl")}-click or Shift-click to select several pages. Save the result as a new PDF.</p>
+        <p>Drag a page to move it. {keys("Ctrl")}-click or Shift-click to select several pages. Save the result as a new PDF;
+          it reopens here and turned pages get their text recognized again.</p>
         <div className="organize-tools" role="toolbar" aria-label="Page tools">
           <button className="pill-btn" onClick={remove} disabled={!canDelete}
             aria-label={selected.length > 1 ? `Delete ${selected.length} pages` : "Delete page"} title="Delete (Delete)">
             <Icon name="trash" size={16} />
+          </button>
+          <button className="pill-btn" onClick={() => rotate(-1)} disabled={saving || !selected.length}
+            aria-label="Rotate counterclockwise" title="Rotate counterclockwise">
+            <span className="mirror"><Icon name="rotate" size={16} /></span>
+          </button>
+          <button className="pill-btn" onClick={() => rotate(1)} disabled={saving || !selected.length}
+            aria-label="Rotate clockwise" title="Rotate clockwise">
+            <Icon name="rotate" size={16} />
           </button>
           <span className="organize-tools-gap" />
           <button className="pill-btn" onClick={() => step(true)} disabled={saving || !draft.undo.length}
@@ -344,6 +359,12 @@ function PageMenu({ target, count, all, onExport, onOrganize, onClose }: {
       <button role="menuitem" onClick={run(() => onOrganize("delete"))} disabled={all}
         title={all ? "A PDF needs at least one page." : undefined}>
         <Icon name="trash" size={16} />{count === 1 ? "Delete page" : `Delete ${count} pages`}
+      </button>
+      <button role="menuitem" onClick={run(() => onOrganize("rotate-cw"))}>
+        <Icon name="rotate" size={16} />{count === 1 ? "Rotate page clockwise" : `Rotate ${count} pages clockwise`}
+      </button>
+      <button role="menuitem" onClick={run(() => onOrganize("rotate-ccw"))}>
+        <span className="mirror"><Icon name="rotate" size={16} /></span>{count === 1 ? "Rotate page counterclockwise" : `Rotate ${count} pages counterclockwise`}
       </button>
       <hr />
       <button role="menuitem" onClick={run(onExport)}>
@@ -553,7 +574,8 @@ function Thumbnails({ pdf, page, rotation, onSelect, rows, activeKey, picks, onM
         const index = range.start + i;
         const n = pages?.[index] ?? index + 1;
         const key = rowKeys[index];
-        return <Thumb key={`${key}-${rotation}`} pdf={pdf} n={n} rowKey={key} size={layout.frames[index]} rotation={rotation}
+        const turn = rows?.[index]?.turn ?? 0;
+        return <Thumb key={`${key}-${rotation}-${turn}`} pdf={pdf} n={n} rowKey={key} size={layout.frames[index]} rotation={rotation} turn={turn}
           active={rows ? key === activeKey : page === n}
           selected={onExportPages || picks ? selected.has(key) : undefined} showSelection={!!picks || picked !== null || !!menu}
           bookmarked={bookmarkedPages?.includes(n)} onToggleBookmark={onToggleBookmark}
@@ -573,6 +595,7 @@ const Thumb = memo(function Thumb({
   rowKey,
   size,
   rotation,
+  turn = 0,
   active,
   selected,
   showSelection,
@@ -588,6 +611,8 @@ const Thumb = memo(function Thumb({
   rowKey: string;
   size: { width: number; height: number };
   rotation: number;
+  /** Quarter-turns the organizer added; the frame swaps its shape to fit. */
+  turn?: number;
   active: boolean;
   selected?: boolean;
   showSelection: boolean;
@@ -602,6 +627,8 @@ const Thumb = memo(function Thumb({
   const ref = useRef<HTMLButtonElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [ready, setReady] = useState(false);
+  const fit = Math.min(size.width / size.height, size.height / size.width);
+  const frame = turn % 2 ? { width: size.height * fit, height: size.width * fit } : size;
 
   useEffect(() => {
     const el = ref.current!;
@@ -611,7 +638,7 @@ const Thumb = memo(function Thumb({
       (entries) => {
         if (!entries[0].isIntersecting) return;
         io.disconnect();
-        renderThumbnail(pdf, n, canvasRef.current!, size.width, rotation, controller.signal)
+        renderThumbnail(pdf, n, canvasRef.current!, frame.width, (rotation + turn * 90) % 360, controller.signal)
           .then(() => !cancelled && setReady(true))
           .catch(() => {});
       },
@@ -623,7 +650,7 @@ const Thumb = memo(function Thumb({
       controller.abort();
       io.disconnect();
     };
-  }, [pdf, n, rotation, size.width]);
+  }, [pdf, n, rotation, turn, frame.width]);
 
   return (
     <div className="thumb-row" style={{ height: size.height + THUMB_ROW_EXTRA }}>
@@ -632,7 +659,7 @@ const Thumb = memo(function Thumb({
         onClick={e => onSelect(rowKey, e)} aria-current={active ? "page" : undefined} aria-pressed={selected}
         aria-haspopup={selected !== undefined && !position ? "menu" : undefined}
         aria-label={position ? `Page ${n}, position ${position}` : `Page ${n}`}>
-        <span className="thumb-frame" style={{ width: size.width, height: size.height, flexShrink: 0 }}>
+        <span className="thumb-frame" style={{ width: frame.width, height: frame.height, flexShrink: 0 }}>
           <canvas ref={canvasRef} style={{ opacity: ready ? 1 : 0 }} />
           {showSelection && selected && <span className="thumb-check"><Icon name="check" size={13} /></span>}
         </span>

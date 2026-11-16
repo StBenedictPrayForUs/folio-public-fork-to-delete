@@ -72,6 +72,9 @@ const TOOLS: { id: Tool; icon: IconName; label: string; key: string }[] = [
   { id: "freetext", icon: "text", label: "Text", key: "T" },
 ];
 
+const AI_ENABLED_KEY = "folio:ai-enabled";
+const DEFAULT_ZOOM_KEY = "folio:default-zoom";
+
 const HIGHLIGHTS = [
   { name: "Yellow", hex: "#FFD84D" },
   { name: "Green", hex: "#5EDC9A" },
@@ -266,6 +269,14 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   const [imageMenu, setImageMenu] = useState<{ target: ImageTarget; x: number; y: number } | null>(null);
   const [imageView, setImageView] = useState<ImageTarget | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
+  // Ask AI stays hidden until it is turned on in Settings. Every tab reads the same preference.
+  const [aiEnabled, setAiEnabled] = useState(() => readSetting(AI_ENABLED_KEY) === "1");
+  useEffect(() => {
+    const sync = (e: StorageEvent) => { if (e.key === AI_ENABLED_KEY) setAiEnabled(e.newValue === "1"); };
+    window.addEventListener("storage", sync);
+    return () => window.removeEventListener("storage", sync);
+  }, []);
+  useEffect(() => { if (!aiEnabled) setAiOpen(false); }, [aiEnabled]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [aiContext, setAiContext] = useState<AiContext | null>(null);
   const [ocr, setOcr] = useState<OcrSession | null>(null);
@@ -345,7 +356,10 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       if (wheelPagingRef.current) viewer.scrollMode = ScrollMode.PAGE;
       viewer.spreadMode = (saved?.spread ?? spreadRef.current) ? SpreadMode.ODD : SpreadMode.NONE;
       viewer.pagesRotation = saved?.rotation ?? 0;
-      viewer.currentScaleValue = saved?.scale ?? (window.innerWidth < 900 ? "page-width" : "auto");
+      // A fit mode follows the default zoom from Settings; an exact zoom chosen for this document is kept.
+      const fallback = readSetting(DEFAULT_ZOOM_KEY);
+      const preferred = fallback && FIT_SCALES.includes(fallback) ? fallback : window.innerWidth < 900 ? "page-width" : "auto";
+      viewer.currentScaleValue = saved?.scale && !FIT_SCALES.includes(saved.scale) ? saved.scale : preferred;
       const restoredPage = Math.min(lastPageRef.current, viewer.pagesCount);
       viewer.currentPageNumber = restoredPage;
       if (saved && Number.isFinite(saved.top) && Number.isFinite(saved.left)) {
@@ -962,7 +976,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       // An empty list requests the full PDF. For page copies, ignore marks on omitted pages, but keep form values.
       const kept = pages?.length ? keptIndexes(pages) : null;
       const annotated = [...storage].some(([, value]) => !kept || typeof value?.pageIndex !== "number" || kept.has(value.pageIndex));
-      if (pages?.length) return { bytes: await copyPdfPages(doc.pdf, pages.map(p => p.page), signal, doc.password), annotated };
+      if (pages?.length) return { bytes: await copyPdfPages(doc.pdf, pages.map(p => p.page), signal, doc.password, pages.map(p => p.turn ?? 0)), annotated };
       return { bytes: annotated ? await doc.pdf.saveDocument() : await doc.pdf.getData(), annotated };
     } finally {
       for (const key of keys) storage.remove(key);
@@ -1019,7 +1033,8 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     try {
       const copy = await currentBytes(doc, organized);
       if (!copy || docRef.current !== doc) return;
-      const withText = await copyWithText(ocr, copy.bytes, organized?.map(p => p.page));
+      // A turned page's earlier recognition was read sideways. Leave it out (page 0 has no text) so the copy reads it again.
+      const withText = await copyWithText(ocr, copy.bytes, organized?.map(p => p.turn ? 0 : p.page));
       if (docRef.current !== doc) return;
       const name = doc.sourceId ? copyName.replace(/\.pdf$/i, "") + " (edited).pdf" : copyName;
       const blob = pdfBlob(withText.bytes);
@@ -1041,8 +1056,10 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       if (doc.sourceId) {
         await openBytes(name, withText.bytes, undefined, beginOpen(), organizedPage(pageRef.current), undefined, doc, organized);
       } else if (organized) {
-        setPageDraft(draft => draft?.pages === organized ? { ...draft, copy: withText.bytes } : draft);
-        flash(withText.problem ? savedMessage({ markup: copy.annotated, ...withText }) : "Downloading organized copy", withText.problem ? 6000 : undefined);
+        // Show the saved copy in this tab, so turned pages are read again the right way up.
+        const opened = await openBytes(copyName, withText.bytes, doc.password, beginOpen(), organizedPage(pageRef.current));
+        if (!opened) setPageDraft(draft => draft?.pages === organized ? { ...draft, copy: withText.bytes } : draft);
+        flash(withText.problem ? savedMessage({ markup: copy.annotated, ...withText }) : "Saved the organized copy", withText.problem ? 6000 : undefined);
       } else {
         flash(savedMessage({ markup: copy.annotated, ...withText }), withText.problem ? 6000 : undefined);
       }
@@ -1404,93 +1421,67 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       data-content-edit={contentEditing || undefined}
       data-tool={tool}
     >
+      {/* One compact row, like a browser: sidebar, document tabs, then a few tools beside the window controls. */}
       <header className="topbar" ref={headerRef}>
-        <div className="topbar-left">
-          <button className="brand" onClick={doc ? () => tabs.library() : undefined} title={doc ? "Back to library" : "Folio"}>
-            <span className="brand-mark" />
-            <span className="brand-name">Folio</span>
-          </button>
-          {doc && (
-            <>
-              <IconButton icon="sidebar" label={keys("Toggle sidebar (Ctrl+\\)")} active={sidebar} onClick={() => setSidebar(!sidebar)} />
-              {!multipleTabs && <div className="doc-title" title={doc.name}>
-                <span>{doc.name}</span>
-                {unsaved && <span className="dirty-dot" role="img" aria-label="Unsaved changes" title="Unsaved changes" />}
-              </div>}
-            </>
-          )}
-        </div>
-
-        <div className="topbar-center">
-          {doc && (
-            <div className="segmented" role="toolbar" aria-label="Tools">
-              {TOOLS.map((t) => (
-                <button
-                  key={t.id}
-                  className={!contentEditing && tool === t.id ? "on" : ""}
-                  aria-label={t.label}
-                  aria-pressed={!contentEditing && tool === t.id}
-                  onClick={() => chooseTool(t.id)}
-                  title={`${t.id === "highlight" ? "Automatically highlight selected text" : t.label} (${t.key})`}
-                >
-                  <Icon name={t.icon} size={16} />
-                  <span>{t.label}</span>
-                </button>
-              ))}
-              <button onClick={startSigning} aria-label="Sign" title="Add a signature"><Icon name="signature" size={16} /><span>Sign</span></button>
-              <button className={contentEditing ? "on edit-mode-toggle" : "edit-mode-toggle"} aria-pressed={contentEditing}
-                aria-label={contentEditing ? "Exit edit mode" : "Edit mode"} title={contentEditing ? "Exit edit mode" : "Edit existing text and images"}
-                onClick={() => contentEditing ? leaveEditMode() : chooseTool("select", true)}>
-                <Icon name={contentEditing ? "check" : "edit"} size={16} /><span>{contentEditing ? "Exit edit mode" : "Edit mode"}</span>
-              </button>
-              {contentEditing && <>
-                <button data-insert-image="" aria-label="Insert image" title={keys("Insert a PNG or JPEG, or paste with Ctrl+V")}
-                  onClick={() => imageFile.current?.click()}><Icon name="camera" size={16} /><span>Insert image</span></button>
-                <input hidden ref={imageFile} type="file" accept="image/png,image/jpeg" aria-label="Image to insert" onChange={event => {
-                  const file = event.target.files?.[0]; event.target.value = "";
-                  if (file) void insertImage(file);
-                }} />
-              </>}
-              {(doc.sourceId || editorDirty) && <button aria-label="Save copy" title="Save edited copy" onClick={download}><Icon name="download" size={16} /><span>Save copy</span></button>}
-            </div>
-          )}
-        </div>
-
-        <div className="topbar-right">
-          {doc && (
-            <>
-              <IconButton icon="sparkle" label="Ask AI" active={aiOpen} onClick={() => { setHistoryOpen(false); setAiOpen(!aiOpen); }} />
-              <IconButton icon="search" label={keys("Search (Ctrl+F)")} active={searchOpen} onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))} />
-            </>
-          )}
-          <MoreMenu
-            items={[
-              ...(doc
-                ? ([
-                    ...(navigation.back ? [{ kind: "action", icon: "chevronLeft", label: "Back", shortcut: keys("Alt+←"), onSelect: () => navigationRef.current?.back() }] : []),
-                    ...(navigation.forward ? [{ kind: "action", icon: "chevronRight", label: "Forward", shortcut: keys("Alt+→"), onSelect: () => navigationRef.current?.forward() }] : []),
-                    ...(navigation.back || navigation.forward ? [{ kind: "divider" }] : []),
-                    { kind: "action", icon: "plus", label: "New tab", shortcut: keys("Ctrl T"), onSelect: () => tabs.library() },
-                    { kind: "action", icon: "close", label: "Close document", shortcut: keys("Ctrl W"), onSelect: () => void tabs.close(tabKey) },
-                    { kind: "divider" },
-                    { kind: "action", icon: "download", label: "Save a copy", shortcut: keys("Ctrl S"), onSelect: download },
-                    { kind: "action", icon: "history", label: "Version history", onSelect: () => { setAiOpen(false); setHistoryOpen(true); } },
-                    { kind: "action", icon: "print", label: "Print", shortcut: keys("Ctrl P"), onSelect: print },
-                    { kind: "action", icon: "info", label: "Document info", onSelect: () => setDialog("info") },
-                    { kind: "action", icon: "search", label: "Recognize text", onSelect: () => pageOcrRef.current?.retry() },
-                    { kind: "divider" },
-                    { kind: "toggle", icon: "moon", label: "PDF dark mode", checked: night, onSelect: () => setNightTo(!night) },
-                    { kind: "action", icon: "expand", label: "Focus mode", shortcut: "F", onSelect: toggleFocus },
-                  ] as MoreItem[])
-                : []),
-              { kind: "action", icon: "settings", label: "Settings", shortcut: keys("Ctrl ,"), onSelect: () => setDialog("settings") },
-              { kind: "action", icon: "keyboard", label: "Keyboard shortcuts", shortcut: "?", onSelect: () => setDialog("shortcuts") },
-              { kind: "action", icon: "info", label: "About Folio", onSelect: () => setDialog("about") },
-            ]}
-          />
-        </div>
+        {doc && <IconButton icon="sidebar" label={keys("Toggle sidebar (Ctrl+\\)")} active={sidebar} onClick={() => setSidebar(!sidebar)} />}
+        <DocumentTabBar tabs={tabs} tabKey={tabKey} />
+        <div className="topbar-spacer" />
+        {doc && (
+          <>
+            {contentEditing && <>
+              <button className="icon-btn" data-insert-image="" aria-label="Insert image" title={keys("Insert a PNG or JPEG, or paste with Ctrl+V")}
+                onClick={() => imageFile.current?.click()}><Icon name="camera" /></button>
+              <input hidden ref={imageFile} type="file" accept="image/png,image/jpeg" aria-label="Image to insert" onChange={event => {
+                const file = event.target.files?.[0]; event.target.value = "";
+                if (file) void insertImage(file);
+              }} />
+            </>}
+            {(doc.sourceId || editorDirty) && <IconButton icon="download" label="Save edited copy" onClick={download} />}
+            <MoreMenu
+              label="Tools"
+              icon={contentEditing ? "edit" : TOOLS.find(t => t.id === tool)?.icon ?? "cursor"}
+              active={contentEditing || tool !== "select"}
+              items={[
+                ...TOOLS.map((t): MoreItem => ({
+                  kind: "toggle", icon: t.icon, label: t.id === "highlight" ? "Highlight selected text" : t.label,
+                  checked: !contentEditing && tool === t.id, shortcut: t.key, onSelect: () => chooseTool(t.id),
+                })),
+                { kind: "divider" },
+                { kind: "action", icon: "signature", label: "Sign", onSelect: startSigning },
+                { kind: "toggle", icon: "edit", label: "Edit text and images", checked: contentEditing,
+                  onSelect: () => contentEditing ? void leaveEditMode() : chooseTool("select", true) },
+              ]}
+            />
+            {aiEnabled && <IconButton icon="sparkle" label="Ask AI" active={aiOpen} onClick={() => { setHistoryOpen(false); setAiOpen(!aiOpen); }} />}
+            <IconButton icon="search" label={keys("Search (Ctrl+F)")} active={searchOpen} onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))} />
+          </>
+        )}
+        <MoreMenu
+          items={[
+            ...(doc
+              ? ([
+                  ...(navigation.back ? [{ kind: "action", icon: "chevronLeft", label: "Back", shortcut: keys("Alt+←"), onSelect: () => navigationRef.current?.back() }] : []),
+                  ...(navigation.forward ? [{ kind: "action", icon: "chevronRight", label: "Forward", shortcut: keys("Alt+→"), onSelect: () => navigationRef.current?.forward() }] : []),
+                  ...(navigation.back || navigation.forward ? [{ kind: "divider" }] : []),
+                  { kind: "action", icon: "plus", label: "New tab", shortcut: keys("Ctrl T"), onSelect: () => tabs.library() },
+                  { kind: "action", icon: "close", label: "Close document", shortcut: keys("Ctrl W"), onSelect: () => void tabs.close(tabKey) },
+                  { kind: "divider" },
+                  { kind: "action", icon: "download", label: "Save a copy", shortcut: keys("Ctrl S"), onSelect: download },
+                  { kind: "action", icon: "history", label: "Version history", onSelect: () => { setAiOpen(false); setHistoryOpen(true); } },
+                  { kind: "action", icon: "print", label: "Print", shortcut: keys("Ctrl P"), onSelect: print },
+                  { kind: "action", icon: "info", label: "Document info", onSelect: () => setDialog("info") },
+                  { kind: "action", icon: "search", label: "Recognize text", onSelect: () => pageOcrRef.current?.retry() },
+                  { kind: "divider" },
+                  { kind: "toggle", icon: "moon", label: "PDF dark mode", checked: night, onSelect: () => setNightTo(!night) },
+                  { kind: "action", icon: "expand", label: "Focus mode", shortcut: "F", onSelect: toggleFocus },
+                ] as MoreItem[])
+              : []),
+            { kind: "action", icon: "settings", label: "Settings", shortcut: keys("Ctrl ,"), onSelect: () => setDialog("settings") },
+            { kind: "action", icon: "keyboard", label: "Keyboard shortcuts", shortcut: "?", onSelect: () => setDialog("shortcuts") },
+            { kind: "action", icon: "info", label: "About Folio", onSelect: () => setDialog("about") },
+          ]}
+        />
       </header>
-      {!focus && multipleTabs && <DocumentTabBar tabs={tabs} tabKey={tabKey} />}
 
       <div className="body" id="reader-panel" role={!focus && multipleTabs ? "tabpanel" : undefined}
         aria-labelledby={!focus && multipleTabs ? "selected-document-tab" : undefined}>
@@ -1524,7 +1515,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
                 onNote={(id, note) => markupRef.current!.setNote(id, note)}
                 onRemove={(id) => markupRef.current!.remove(id)}
                 onDocNote={(note) => markupRef.current!.setDocNote(note)}
-                onAsk={(mark: Mark) => askAbout(mark.text, mark.page + 1)}
+                onAsk={aiEnabled ? (mark: Mark) => askAbout(mark.text, mark.page + 1) : undefined}
               />
             }
           />
@@ -1642,7 +1633,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
               colors={HIGHLIGHTS}
               current={highlightColor}
               onHighlight={(hex, note) => void quickHighlight(hex, note)}
-              onAsk={() => { setPinned(null); askAbout(selection.text, selection.page); }}
+              onAsk={aiEnabled ? () => { setPinned(null); askAbout(selection.text, selection.page); } : undefined}
               onPin={() => setPinned(selection)}
               onDismiss={dismissSelection}
             />
@@ -1670,7 +1661,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
                 setNoteBox({ markId: menuMark.id, anchor: { x: (r.left + r.right) / 2, top: r.top, bottom: r.bottom }, quote: menuMark.text, initial: menuMark.note });
                 setHighlightMenu(null);
               }}
-              onAsk={() => { askAbout(menuMark.text, menuMark.page + 1); setHighlightMenu(null); }}
+              onAsk={aiEnabled ? () => { askAbout(menuMark.text, menuMark.page + 1); setHighlightMenu(null); } : undefined}
               onRemove={() => removeHighlight(menuMark.id)}
             />
           )}
@@ -1700,7 +1691,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
           onOpen={(v, blob) => tabs.open([{ kind: "blob", name: v.name, blob }])}
           onDownload={(v, blob) => saveBlob(blob, v.name.replace(/\.pdf$/i, "") + ` (v${v.number}).pdf`)}
           onClose={() => setHistoryOpen(false)} />}
-        {doc && aiOpen && !focus && (
+        {doc && aiEnabled && aiOpen && !focus && (
           <AiPanel
             key={`${doc.sourceId ?? doc.id}:${doc.password ? 0 : chatGeneration}`}
             pdf={doc.pdf}
@@ -1746,6 +1737,10 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       {dialog === "about" && <AboutDialog onClose={() => setDialog(null)} />}
       {(dialog === "settings" || dialog === "ai-settings") && <SettingsDialog initialSection={dialog === "ai-settings" ? "Ask AI" : "General"}
         theme={theme} onTheme={setThemeTo} night={night} onNight={setNightTo}
+        aiEnabled={aiEnabled} onAiEnabled={next => {
+          setAiEnabled(next);
+          if (!writeSetting(AI_ENABLED_KEY, next ? "1" : "0")) flash("Ask AI changed, but couldn't save the preference.");
+        }}
         scanLanguages={scanLanguages} onScanLanguages={next => {
           setScanLanguages(next);
           try { localStorage.setItem("folio:scan-language", next.join("+")); }

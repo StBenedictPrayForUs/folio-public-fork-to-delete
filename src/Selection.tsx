@@ -50,10 +50,40 @@ export function useTextSelection(container: HTMLElement | null, enabled: boolean
       });
     };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
-    const down = (e: PointerEvent) => { if (e.button === 0) { pointerDown = true; setInfo(null); } };
-    const up = () => { if (pointerDown) { pointerDown = false; schedule(); } };
+    // A plain click that leaves the selection untouched (on a page's margin, an image, the gray background)
+    // dismisses it. Without this, Chromium keeps the selection and the popover comes straight back.
+    let press: { x: number; y: number; range: string | null } | null = null;
+    const rangeKey = () => {
+      const s = document.getSelection();
+      return s && !s.isCollapsed ? `${s.anchorOffset}:${s.focusOffset}:${s.toString()}` : null;
+    };
+    const down = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      pointerDown = true;
+      press = { x: e.clientX, y: e.clientY, range: rangeKey() };
+      setInfo(null);
+    };
+    const up = (e: PointerEvent) => {
+      if (!pointerDown) return;
+      pointerDown = false;
+      const start = press;
+      press = null;
+      if (start?.range && !e.shiftKey && Math.hypot(e.clientX - start.x, e.clientY - start.y) < 4 && rangeKey() === start.range) {
+        document.getSelection()?.removeAllRanges();
+      }
+      schedule();
+    };
+    // Clicking elsewhere in the window (sidebar, tab bar) also dismisses a selection on the page.
+    const outside = (e: PointerEvent) => {
+      const target = e.target as Element | null;
+      if (!target || container.contains(target) || target.closest(".selection-popover, .note-box, .highlight-menu")) return;
+      const s = document.getSelection();
+      const anchor = s?.anchorNode instanceof Element ? s.anchorNode : s?.anchorNode?.parentElement;
+      if (s && !s.isCollapsed && anchor && container.contains(anchor)) s.removeAllRanges();
+    };
     document.addEventListener("selectionchange", schedule);
     container.addEventListener("pointerdown", down);
+    window.addEventListener("pointerdown", outside, true);
     window.addEventListener("pointerup", up);
     container.addEventListener("scroll", schedule, { passive: true });
     window.addEventListener("resize", schedule);
@@ -62,6 +92,7 @@ export function useTextSelection(container: HTMLElement | null, enabled: boolean
       cancelAnimationFrame(frame);
       document.removeEventListener("selectionchange", schedule);
       container.removeEventListener("pointerdown", down);
+      window.removeEventListener("pointerdown", outside, true);
       window.removeEventListener("pointerup", up);
       container.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", schedule);
@@ -84,7 +115,8 @@ interface PopoverProps {
   current: string;
   /** Highlights the selection in a color, with the note typed so far (may be empty). */
   onHighlight: (hex: string, note: string) => void;
-  onAsk: () => void;
+  /** Absent when Ask AI is turned off in Settings. */
+  onAsk?: () => void;
   /** The note field took focus (which clears the page selection): keep the popover open. */
   onPin: () => void;
   onDismiss: () => void;
@@ -94,7 +126,7 @@ interface PopoverProps {
 export function SelectionPopover({ info, stageWidth, colors, current, onHighlight, onAsk, onPin, onDismiss }: PopoverProps) {
   const [copy, setCopy] = useState<"idle" | "done" | "failed">("idle");
   const [note, setNote] = useState("");
-  const width = 30 * colors.length + 210;
+  const width = 30 * colors.length + (onAsk ? 210 : 130);
   return (
     <div
       className="selection-popover"
@@ -116,9 +148,9 @@ export function SelectionPopover({ info, stageWidth, colors, current, onHighligh
           />
         ))}
         <span className="divider" />
-        <button className="pop-btn" onClick={onAsk} title="Ask AI about this passage">
+        {onAsk && <button className="pop-btn" onClick={onAsk} title="Ask AI about this passage">
           <Icon name="sparkle" size={15} /> Ask AI
-        </button>
+        </button>}
         <button
           className="pop-btn icon-only"
           title={copy === "done" ? "Copied" : copy === "failed" ? "Copy failed" : "Copy"}
@@ -156,13 +188,13 @@ interface HighlightMenuProps {
   hasNote: boolean;
   onRecolor: (hex: string) => void;
   onNote: () => void;
-  onAsk: () => void;
+  onAsk?: () => void;
   onRemove: () => void;
 }
 
 /** Shown when clicking an existing highlight. */
 export function HighlightMenu({ rect, stageWidth, colors, current, hasNote, onRecolor, onNote, onAsk, onRemove }: HighlightMenuProps) {
-  const width = 30 * colors.length + 300;
+  const width = 30 * colors.length + (onAsk ? 300 : 220);
   const anchor = { x: (rect.left + rect.right) / 2, top: rect.top, bottom: rect.bottom };
   return (
     <div className="selection-popover" role="toolbar" aria-label="Highlight" style={place(anchor, width, 44, stageWidth)}>
@@ -181,9 +213,9 @@ export function HighlightMenu({ rect, stageWidth, colors, current, hasNote, onRe
         <button className="pop-btn" onClick={onNote} title={hasNote ? "Edit note" : "Add a note"}>
           <Icon name="note" size={15} /> {hasNote ? "Edit note" : "Note"}
         </button>
-        <button className="pop-btn" onClick={onAsk} title="Ask AI about this highlight">
+        {onAsk && <button className="pop-btn" onClick={onAsk} title="Ask AI about this highlight">
           <Icon name="sparkle" size={15} /> Ask AI
-        </button>
+        </button>}
         <button className="pop-btn danger" onClick={onRemove} title="Remove highlight (Delete)">
           <Icon name="trash" size={15} /> Remove
         </button>

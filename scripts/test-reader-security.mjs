@@ -222,7 +222,7 @@ try {
   await waitCards(1);
   await drop(red, "shared.pdf");
   await waitCards(2);
-  await page.getByTitle("Back to library").click();
+  await page.getByRole("button", { name: "New tab", exact: true }).click();
   await page.locator(".recent-card img").nth(1).waitFor();
   assert.equal(await page.locator(".recent-card img").count(), 2);
   const previews = await page.evaluate(async () => {

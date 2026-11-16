@@ -20,3 +20,12 @@ export function readerPage(window) {
     waitForTimeout: window.waitForTimeout.bind(window), waitForEvent: window.waitForEvent.bind(window),
   };
 }
+
+/** Picks an entry from the top bar's Tools menu (Select, Highlight selected text, Draw, Text, Sign, Edit text and images). */
+export async function useTool(page, name) {
+  await page.locator(".topbar").getByRole("button", { name: "Tools", exact: true }).click();
+  await page.locator('.menu.dropdown [role^="menuitem"]').filter({ hasText: new RegExp("^" + name) }).first().click();
+}
+
+/** Waits until the reader's active tool is `id` ("select", "highlight", "ink", "freetext"). */
+export const toolIs = (page, id) => page.waitForFunction(id => document.querySelector(".app")?.getAttribute("data-tool") === id, id);

@@ -42,7 +42,8 @@ export async function loadPdf(data: Uint8Array, signal: AbortSignal, password?: 
 }
 
 /** Writes the requested one-based pages into a new PDF, in the supplied order. */
-export async function copyPdfPages(pdf: PDFDocumentProxy, pages: number[], signal: AbortSignal, password?: string) {
+/** `turns` holds extra clockwise quarter-turns for each page of the copy, in copy order. */
+export async function copyPdfPages(pdf: PDFDocumentProxy, pages: number[], signal: AbortSignal, password?: string, turns?: number[]) {
   // pdf.js visits included pages in source order and takes each one's destination index.
   const bySource = pages.map((page, destination) => ({ source: page - 1, destination })).sort((a, b) => a.source - b.source);
   const includePages = bySource.map(entry => entry.source);
@@ -52,10 +53,21 @@ export async function copyPdfPages(pdf: PDFDocumentProxy, pages: number[], signa
   try {
     const bytes = await snapshot.extractPages([{ document: null, includePages, pageIndices }]);
     if (!bytes?.length) throw new Error("Couldn't copy the selected pages.");
-    return bytes;
+    return turns?.some(Boolean) ? await turnPages(bytes, turns) : bytes;
   } finally {
     if (snapshot !== pdf) await snapshot.loadingTask.destroy();
   }
+}
+
+/** Writes each page's new orientation (its /Rotate entry), so every reader and OCR pass sees it upright. */
+async function turnPages(bytes: Uint8Array, turns: number[]) {
+  const lib = await import("pdf-lib");
+  const doc = await lib.PDFDocument.load(bytes);
+  doc.getPages().forEach((page, i) => {
+    const turn = turns[i] ?? 0;
+    if (turn) page.setRotation(lib.degrees((((page.getRotation().angle + turn * 90) % 360) + 360) % 360));
+  });
+  return doc.save();
 }
 
 /** Renders a page into a canvas sized to `width` CSS pixels. */

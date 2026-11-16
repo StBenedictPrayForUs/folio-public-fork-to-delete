@@ -8,6 +8,11 @@ import { updateSummary } from "./updates";
 import { ScanLanguagePicker } from "./ScanLanguagePicker";
 import type { ScanLanguage } from "./scanLanguage";
 import { Icon } from "./icons";
+import { readSetting, writeSetting } from "./preferences";
+
+const DEFAULT_ZOOM_KEY = "folio:default-zoom";
+const ZOOMS = [{ id: "auto", name: "Automatic" }, { id: "page-width", name: "Fit width" }, { id: "page-fit", name: "Fit page" }] as const;
+type DefaultZoom = typeof ZOOMS[number]["id"];
 import { clearStoredData, countStoredData, onStoredDataCleared, type StoredCategory } from "./recent";
 
 /** One place for every Folio preference. */
@@ -17,6 +22,8 @@ interface Props {
   onTheme: (theme: "light" | "dark") => void;
   night: boolean;
   onNight: (on: boolean) => void;
+  aiEnabled: boolean;
+  onAiEnabled: (on: boolean) => void;
   wheelPaging: boolean;
   onWheelPaging: (on: boolean) => void;
   scanLanguages: ScanLanguage[];
@@ -149,7 +156,7 @@ function StoredData() {
   </details>;
 }
 
-export function SettingsDialog({ initialSection = "General", theme, onTheme, night, onNight, wheelPaging, onWheelPaging, scanLanguages, onScanLanguages, onOpenChangelog, onClose }: Props) {
+export function SettingsDialog({ initialSection = "General", theme, onTheme, night, onNight, aiEnabled, onAiEnabled, wheelPaging, onWheelPaging, scanLanguages, onScanLanguages, onOpenChangelog, onClose }: Props) {
   const desktop = window.folioDesktop;
   const ai = desktop?.ai;
   const [error, setError] = useState<string | null>(null);
@@ -186,6 +193,11 @@ export function SettingsDialog({ initialSection = "General", theme, onTheme, nig
     return () => { current = false; };
   }, [ai, section]);
 
+  const [defaultZoom, setDefaultZoom] = useState<DefaultZoom>(() => {
+    const saved = readSetting(DEFAULT_ZOOM_KEY);
+    return ZOOMS.find(z => z.id === saved)?.id ?? "auto";
+  });
+
   // Signature
   const [savedSignature, setSavedSignature] = useState(() => {
     try { return !!localStorage.getItem("folio:signature"); } catch { return false; }
@@ -210,6 +222,12 @@ export function SettingsDialog({ initialSection = "General", theme, onTheme, nig
         </Section>
 
         <Section title="Reading">
+          <Row label="Default zoom" hint="How documents open. Fit page shows the whole page (fit height for portrait pages). An exact zoom you set on a document is remembered for it.">
+            <Choice label="Default zoom" value={defaultZoom} options={ZOOMS} onChange={next => {
+              setDefaultZoom(next);
+              if (!writeSetting(DEFAULT_ZOOM_KEY, next)) setError("Couldn't save the default zoom.");
+            }} />
+          </Row>
           <Row label="Scroll one page at a time" hint="Turn a page with each mouse wheel click or trackpad swipe.">
             <Switch label="Scroll one page at a time" checked={wheelPaging} onChange={onWheelPaging} />
           </Row>
@@ -222,6 +240,10 @@ export function SettingsDialog({ initialSection = "General", theme, onTheme, nig
 
         {ai && section === "Ask AI" && (
           <section className="settings-section">
+            <Row label="Show Ask AI" hint="Off by default. When on, Ask AI sends the document's text to the provider you choose below. Keep it off for documents with patient or other private information.">
+              <Switch label="Show Ask AI" checked={aiEnabled} onChange={onAiEnabled} />
+            </Row>
+            {aiEnabled && <>
             <Row label="Provider">
               <select aria-label="Ask AI provider" className="ai-provider" value={provider} onChange={event => {
                 const next = event.target.value as AiProvider;
@@ -261,6 +283,7 @@ export function SettingsDialog({ initialSection = "General", theme, onTheme, nig
               onConfigured={configured => setAiStatus({ ...aiStatus, openrouter: { configured } })} /> : <p className="settings-hint">Checking connection…</p>)}
             {provider === "custom" && (aiStatus ? <CustomEndpointSettings ai={ai} status={aiStatus.custom}
               onStatus={custom => setAiStatus({ ...aiStatus, custom })} /> : <p className="settings-hint">Checking connection…</p>)}
+            </>}
           </section>
         )}
 
