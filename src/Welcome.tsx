@@ -68,11 +68,12 @@ export function Welcome({ active, onPick, onOpenUrl, onOpenRecent, onSample, loa
   const [recent, setRecent] = useState<RecentFile[]>([]);
   const [recentError, setRecentError] = useState<string | null>(null);
   const [version, setVersion] = useState<string | null>(null);
+  const [portable, setPortable] = useState(false);
 
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
 
   useEffect(() => {
-    window.folioDesktop?.getAppInfo().then((info) => setVersion(info.version)).catch(() => {});
+    window.folioDesktop?.getAppInfo().then((info) => { setVersion(info.version); setPortable(info.mode === "portable"); }).catch(() => {});
     return window.folioDesktop?.onUpdateStatus?.(setUpdate);
   }, []);
 
@@ -159,7 +160,8 @@ export function Welcome({ active, onPick, onOpenUrl, onOpenRecent, onSample, loa
           </section>
         )}
 
-        {version && (
+        {/* Portable copies don't update themselves, so there's nothing to report. */}
+        {version && !portable && (
           <p className="version">
             Folio {version}
             {update && <UpdateLine status={update} />}

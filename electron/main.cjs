@@ -190,6 +190,9 @@ async function checkForUpdates(manual = false) {
 function installKind() {
   if (!app.isPackaged) return "development";
   if (process.env.PORTABLE_EXECUTABLE_FILE) return "portable";
+  // A Windows build run from its folder (release/win-unpacked) has no updater settings: treat it as portable
+  // instead of checking for updates that can never apply to it.
+  if (process.platform === "win32" && !fs.existsSync(path.join(process.resourcesPath, "app-update.yml"))) return "portable";
   if (IS_LINUX) return process.env.APPIMAGE ? "appimage" : "package";
   return "installed";
 }
