@@ -6,7 +6,7 @@ contextBridge.exposeInMainWorld("folioDesktop", {
   printSheets: (job) => ipcRenderer.invoke("folio:print-sheets", job),
   /** Called with (name, data, note?) whenever a PDF is opened from Explorer, or a Word document has been converted. */
   onOpenFile(callback) {
-    const listener = (_e, file) => callback(file.name, new Uint8Array(file.data), file.note ?? undefined, file.token);
+    const listener = (_e, file) => callback(file.name, new Uint8Array(file.data), file.note ?? undefined, file.token, file.path ?? undefined);
     ipcRenderer.on("folio:open-file", listener);
     return () => ipcRenderer.removeListener("folio:open-file", listener);
   },
@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld("folioDesktop", {
     ipcRenderer.on("folio:tab-command", listener);
     return () => ipcRenderer.removeListener("folio:tab-command", listener);
   },
+  /** Where a picked or dropped file lives on disk; empty when it has no path. */
+  pathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return ""; } },
   /** Returns the converted PDF to the tab that opened the Word document. */
   openDocument: (file) => ipcRenderer.invoke("folio:open-document", webUtils.getPathForFile(file)),
   ready: () => ipcRenderer.invoke("folio:ready"),

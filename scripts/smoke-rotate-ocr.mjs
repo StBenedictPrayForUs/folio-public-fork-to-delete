@@ -38,8 +38,19 @@ try {
   }
   const bytes = Buffer.from(await pdf.save());
   await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
-    "folio:open-file", { name: "Sideways fax.pdf", data: Buffer.from(data) }), [...bytes]);
+    "folio:open-file", { name: "Sideways fax.pdf", data: Buffer.from(data), path: String.raw`C:\Faxes\Sideways fax.pdf` }), [...bytes]);
   await page.window.waitForFunction(() => document.title.startsWith("Sideways fax.pdf"));
+
+  // A tab's right-click menu copies the path of the file it shows.
+  const tabMenu = async name => {
+    await page.getByRole("tab", { name, exact: true }).click({ button: "right" });
+    return page.getByRole("menuitem", { name: "Copy file path" });
+  };
+  // Capture the write rather than touch this computer's clipboard.
+  await page.evaluate(() => { navigator.clipboard.writeText = async text => { window.__copied = text; }; });
+  await (await tabMenu("Sideways fax.pdf")).click();
+  assert.equal(await page.evaluate(() => window.__copied), String.raw`C:\Faxes\Sideways fax.pdf`);
+  console.log("ok  a tab's menu copies its file path");
   await page.locator('.page[data-page-number="1"] .textLayer').getByText(/COVER/).waitFor({ timeout: 90_000 });
   console.log("ok  the upright scan page is recognized");
 
@@ -66,6 +77,10 @@ try {
   await page.locator('.page[data-page-number="2"]').scrollIntoViewIfNeeded();
   await page.locator('.page[data-page-number="2"] .textLayer').getByText(/SIDEWAYS/).waitFor({ timeout: 90_000 });
   console.log("ok  the turned page is recognized after saving");
+  const copyPath = await tabMenu("Sideways fax (organized).pdf");
+  assert.equal(await copyPath.isDisabled(), true, "the saved copy isn't the file the tab was opened from");
+  await page.keyboard.press("Escape");
+  await copyPath.waitFor({ state: "detached" });
 
   // A plain click away from selected text dismisses the selection popover, wherever it lands.
   const line = page.locator('.page[data-page-number="2"] .textLayer').getByText(/SIDEWAYS/).first();
@@ -89,6 +104,10 @@ try {
   await page.locator(".sidebar").click({ position: { x: 10, y: 10 } });
   await popover.waitFor({ state: "detached", timeout: 3_000 });
   console.log("ok  clicking away dismisses the selection popover");
+
+  await page.getByRole("button", { name: "New tab", exact: true }).click();
+  await page.locator(".recent-card").first().waitFor();
+  await page.screenshot({ path: path.join(root, "release", "smoke", "home-compact.png") });
 } finally {
   await app.close();
 }

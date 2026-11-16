@@ -96,7 +96,7 @@ async function sendFile(file) {
   try {
     checkDiskPath(file);
     const data = await readRegular(await fs.promises.realpath(file));
-    if (!target.isDestroyed()) target.webContents.send("folio:open-file", { name: path.basename(file), data });
+    if (!target.isDestroyed()) target.webContents.send("folio:open-file", { name: path.basename(file), data, path: file });
   } catch (err) {
     dialog.showErrorBox("Couldn't open file", `${file}\n\n${err.userMessage ?? err.message}`);
   }
@@ -110,7 +110,7 @@ async function sendWordFile(file, target) {
   const token = crypto.randomUUID();
   send("folio:converting", { name: original, token });
   try {
-    send("folio:open-file", { ...await openWord(file, (msg) => logConvert(`${file}: ${msg}`)), token });
+    send("folio:open-file", { ...await openWord(file, (msg) => logConvert(`${file}: ${msg}`)), token, path: file });
   } catch (error) {
     logConvert(`${file}: ${error?.stack || error}`);
     send("folio:open-failed", { token, message: `Couldn't convert “${original}” to PDF. ${error?.userMessage ?? ""}`.trim() });

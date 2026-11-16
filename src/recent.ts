@@ -9,6 +9,8 @@ export interface RecentFile {
   lastPage: number;
   thumb: string;
   data: Blob;
+  /** The file on disk it was last opened from, if any. */
+  path?: string;
 }
 
 const DB_NAME = "folio";

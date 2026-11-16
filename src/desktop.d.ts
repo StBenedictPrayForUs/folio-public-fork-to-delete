@@ -12,7 +12,8 @@ interface FolioDesktop {
   printSheets(job: { images: string[]; paper: "Letter" | "A4" | "Legal"; landscape: boolean; dpi: 150 | 300 | 600;
     copies: number; printer: string; booklet: boolean }): Promise<{ ok: boolean; error?: string }>;
   /** `note` says where a converted Word document's PDF was saved. */
-  onOpenFile(callback: (name: string, data: Uint8Array, note?: string, token?: string) => void): () => void;
+  onOpenFile(callback: (name: string, data: Uint8Array, note?: string, token?: string, path?: string) => void): () => void;
+  pathForFile(file: File): string;
   onConverting(callback: (name: string, token: string) => void): () => void;
   onOpenFailed(callback: (message: string, token: string) => void): () => void;
   onTabCommand(callback: (command: "new" | "close" | "next" | "previous") => void): () => void;

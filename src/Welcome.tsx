@@ -91,30 +91,25 @@ export function Welcome({ active, onPick, onOpenUrl, onOpenRecent, onSample, loa
   return (
     <div className="welcome">
       <div className="welcome-inner">
-        <div className="hero">
-          <h1>Read beautifully.</h1>
-          <p>A calm, fast PDF reader. Your files never leave this device.</p>
-        </div>
-
-        <button className="dropzone" onClick={onPick} disabled={loading}>
-          <div className="dropzone-icon">
-            <Icon name={loading ? "file" : "upload"} size={26} />
-          </div>
-          <div className="dropzone-text">
-            <strong>{loading ? "Opening…" : "Open a PDF"}</strong>
-            <span>{window.folioDesktop ? "Drop a PDF, a Word document, a link, or a webpage anywhere, or click to browse"
-              : "Drop a PDF, a link, or a webpage anywhere, or click to browse"}</span>
-          </div>
-          <kbd>{keys("Ctrl O")}</kbd>
-        </button>
-
-        <div className="welcome-links">
-          <button className="link" onClick={onOpenUrl} disabled={loading}>
-            <Icon name="link" size={15} /> Open from URL
+        <div className="welcome-actions">
+          <button className="dropzone" onClick={onPick} disabled={loading}>
+            <div className="dropzone-icon">
+              <Icon name={loading ? "file" : "upload"} size={18} />
+            </div>
+            <div className="dropzone-text">
+              <strong>{loading ? "Opening…" : "Open a PDF"}</strong>
+              <span>{window.folioDesktop ? "or drop a PDF, Word document, or link anywhere" : "or drop a PDF or link anywhere"}</span>
+            </div>
+            <kbd>{keys("Ctrl O")}</kbd>
           </button>
-          <button className="link" onClick={onSample}>
-            <Icon name="book" size={15} /> Try a sample document
-          </button>
+          <div className="welcome-links">
+            <button className="link" onClick={onOpenUrl} disabled={loading}>
+              <Icon name="link" size={15} /> Open from URL
+            </button>
+            <button className="link" onClick={onSample}>
+              <Icon name="book" size={15} /> Try a sample document
+            </button>
+          </div>
         </div>
 
         {recent.length > 0 && (

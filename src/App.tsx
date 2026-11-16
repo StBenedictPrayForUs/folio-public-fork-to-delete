@@ -560,6 +560,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
             lastPage: pageRef.current,
             thumb,
             data: pdfBlob(data),
+            path: tabs.pathOf(tabKey) ?? existing?.path,
           });
         })().catch(() => {});
         return true;
@@ -600,10 +601,11 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
 
   const openFiles = useCallback((files: FileList) => {
     tabs.open(Array.from(files, (file): OpenSource => {
-      if (window.folioDesktop && /\.docx?$/i.test(file.name)) return { kind: "word", name: file.name, file };
+      const path = window.folioDesktop?.pathForFile(file) || undefined;
+      if (window.folioDesktop && /\.docx?$/i.test(file.name)) return { kind: "word", name: file.name, file, path };
       if (file.type && file.type !== "application/pdf" && !/\.pdf$/i.test(file.name))
         return { kind: "error", name: file.name, message: `“${file.name}” isn't a PDF.` };
-      return { kind: "blob", name: file.name, blob: file };
+      return { kind: "blob", name: file.name, blob: file, path };
     }));
   }, [tabs]);
 
@@ -1054,9 +1056,11 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       if (docRef.current !== doc) return;
       setError(null);
       if (doc.sourceId) {
+        tabs.forgetPath(tabKey);
         await openBytes(name, withText.bytes, undefined, beginOpen(), organizedPage(pageRef.current), undefined, doc, organized);
       } else if (organized) {
         // Show the saved copy in this tab, so turned pages are read again the right way up.
+        tabs.forgetPath(tabKey);
         const opened = await openBytes(copyName, withText.bytes, doc.password, beginOpen(), organizedPage(pageRef.current));
         if (!opened) setPageDraft(draft => draft?.pages === organized ? { ...draft, copy: withText.bytes } : draft);
         flash(withText.problem ? savedMessage({ markup: copy.annotated, ...withText }) : "Saved the organized copy", withText.problem ? 6000 : undefined);
@@ -1707,7 +1711,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         )}
       </div>
 
-      {!doc && <Welcome active={active} onPick={pickFile} onOpenUrl={() => openUrlDialog()} onOpenRecent={file => tabs.open([{ kind: "blob", name: file.name, blob: file.data, recentId: file.id }])}
+      {!doc && <Welcome active={active} onPick={pickFile} onOpenUrl={() => openUrlDialog()} onOpenRecent={file => tabs.open([{ kind: "blob", name: file.name, blob: file.data, recentId: file.id, path: file.path }])}
         onSample={() => tabs.open([{ kind: "sample", name: "Folio sample.pdf" }])} loading={loading} />}
 
       {loading && doc && <div className="loading-bar" />}

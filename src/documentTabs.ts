@@ -2,9 +2,9 @@ import { activeDocument, setActiveDocument } from "./session";
 import { getRecent } from "./recent";
 
 export type OpenSource =
-  | { kind: "bytes"; name: string; data: Uint8Array; note?: string; password?: string }
-  | { kind: "blob"; name: string; blob: Blob; recentId?: string }
-  | { kind: "word"; name: string; file: File }
+  | { kind: "bytes"; name: string; data: Uint8Array; note?: string; password?: string; path?: string }
+  | { kind: "blob"; name: string; blob: Blob; recentId?: string; path?: string }
+  | { kind: "word"; name: string; file: File; path?: string }
   | { kind: "url"; name: string; url: string }
   | { kind: "sample" | "converting"; name: string }
   | { kind: "error"; name: string; message: string };
@@ -21,6 +21,8 @@ interface Tab {
   key: number;
   name: string;
   contentId?: string;
+  /** Where the document's file is on disk, when it was opened from one. */
+  path?: string;
   dirty: boolean;
   frame?: ReaderFrame;
   reader?: Reader;
@@ -103,6 +105,7 @@ export class DocumentTabs {
       const tab = !first && current && !current.name && !current.closing ? current : this.create();
       tab.name = source.name;
       tab.source = source;
+      tab.path = "path" in source ? source.path || undefined : undefined;
       first ||= tab.key;
       this.deliver(tab);
     }
@@ -124,6 +127,7 @@ export class DocumentTabs {
     if (!tab || tab.closing) return;
     tab.name = source.name;
     tab.source = source;
+    if ("path" in source && source.path) tab.path = source.path;
     this.deliver(tab);
     this.changed();
   }
@@ -143,6 +147,12 @@ export class DocumentTabs {
     if (this.active === key) setActiveDocument(id);
     this.changed();
     return true;
+  }
+  pathOf(key: number) { return this.entry(key)?.path; }
+  /** The tab now shows a copy that isn't the file it was opened from. */
+  forgetPath(key: number) {
+    const tab = this.entry(key);
+    if (tab?.path) { tab.path = undefined; this.changed(); }
   }
   markDirty(key: number, dirty: boolean) {
     const tab = this.entry(key);
@@ -189,8 +199,8 @@ export class DocumentTabs {
     });
     const conversions = new Map<string, number>();
     desktop?.onConverting((name, token) => conversions.set(token, this.open([{ kind: "converting", name }])));
-    desktop?.onOpenFile((name, data, note, token) => {
-      const source: OpenSource = { kind: "bytes", name, data, note };
+    desktop?.onOpenFile((name, data, note, token, path) => {
+      const source: OpenSource = { kind: "bytes", name, data, note, path };
       const key = token && conversions.get(token);
       if (token && key) { conversions.delete(token); this.finishConversion(key, source); }
       else this.open([source]);
@@ -204,6 +214,6 @@ export class DocumentTabs {
     });
     if (await desktop?.ready() || !last || this.revision !== initial) return;
     const recent = await getRecent(last);
-    if (recent && this.revision === initial) this.open([{ kind: "blob", name: recent.name, blob: recent.data, recentId: recent.id }]);
+    if (recent && this.revision === initial) this.open([{ kind: "blob", name: recent.name, blob: recent.data, recentId: recent.id, path: recent.path }]);
   }
 }
