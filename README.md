@@ -330,6 +330,7 @@ Requires [Node.js](https://nodejs.org/) 22 or newer.
 ```sh
 npm install
 npm run app        # build and run the desktop app
+npm test           # unit tests, about 10 seconds
 npm run smoke      # end-to-end check: launches the built app and exercises the basics
 npm run dev        # browser version with hot reload at http://localhost:5173
 
@@ -351,8 +352,7 @@ terminal has `ELECTRON_RUN_AS_NODE=1` set, unset it first.
   PDFs from the file manager, keeps a single window, downloads links, and handles updates. `webpage.cjs` converts
   webpages to PDF. `ai.cjs` runs Ask AI (ChatGPT
   sign-in and requests, OpenRouter and custom endpoint keys and requests, and Claude Code). Stored credentials stay in the main process.
-- `scripts/release.mjs` and `.github/workflows/release-build.yml`: the release pipeline (see
-  [CONTRIBUTING.md](CONTRIBUTING.md#releasing)). `scripts/smoke-test.mjs` is the cross-platform smoke test CI runs.
+- `scripts/smoke-test.mjs`: the end-to-end smoke test (`npm run smoke`).
   `scripts/screenshots.mjs` retakes the Ask AI, highlights, and search screenshots at the top of this README (`npm run build`, then `node scripts/screenshots.mjs`).
 
 ## Contributing

@@ -1,4 +1,4 @@
-// End-to-end smoke test, run in CI on Windows, macOS, and Linux (and locally with `npm run smoke`):
+// End-to-end smoke test (`npm run smoke`):
 // launches the built app in Electron, opens the sample document, and checks that pages render, text is
 // selectable and highlightable, text boxes survive reopening, a scanned page can be recognized and saved with its text,
 // and the window chrome matches the platform.
@@ -11,11 +11,10 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { electronPath } from "./electron-path.mjs";
+import { smokeLaunch } from "./smoke-launch.mjs";
 import { readerPage, toolIs, useTool } from "./reader-page.mjs";
 import { checkReaderTools } from "./smoke-reader-tools.mjs";
 import { checkSignatureTargets } from "./smoke-signature-targets.mjs";
-import { checkOpenRouter } from "./smoke-openrouter.mjs";
 import { checkCustomEndpoint } from "./smoke-custom-endpoint.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -24,14 +23,9 @@ const shots = path.join(root, "release", "smoke");
 mkdirSync(shots, { recursive: true });
 
 // The window stays hidden so a local run doesn't pop up over other work; FOLIO_SMOKE_SHOW=1 shows it.
-const env = { ...process.env, FOLIO_TEST_USER_DATA: mkdtempSync(path.join(tmpdir(), "folio-smoke-")),
-  FOLIO_TEST_HIDDEN: process.env.FOLIO_SMOKE_SHOW === "1" ? "0" : "1" };
-delete env.ELECTRON_RUN_AS_NODE;
-const executablePath = electronPath(env);
-// Containers often run as root, where Chromium's sandbox can't start. The made-up names stand in for web addresses
-// that lead to this computer (see the local network checks below).
-const args = [root, "--mute-audio", "--host-resolver-rules=MAP folio-local.test 127.0.0.1, MAP folio-rebind.test 127.0.0.1, MAP folio-pinned.test 127.0.0.2",
-  ...(process.platform === "linux" && process.getuid?.() === 0 ? ["--no-sandbox"] : [])];
+// The made-up names stand in for web addresses that lead to this computer (see the local network checks below).
+const { env, executablePath, args } = smokeLaunch("folio-smoke-",
+  ["--host-resolver-rules=MAP folio-local.test 127.0.0.1, MAP folio-rebind.test 127.0.0.1, MAP folio-pinned.test 127.0.0.2"]);
 
 // The smallest .docx Word opens: one paragraph of `text`.
 async function wordDocument(text) {
@@ -139,7 +133,6 @@ try {
   await page.keyboard.press("Escape");
   assert.equal(await page.getByRole("dialog").count(), 0);
   console.log("ok  shortcuts wait while a dialog is open");
-  await checkOpenRouter(app, page);
   await checkCustomEndpoint(app, page);
 
   // The annotation tools live in the top bar's Tools menu.
@@ -585,30 +578,6 @@ try {
   assert.equal(await page.evaluate(() => localStorage.getItem("folio:night")), "0");
   await page.keyboard.press("Escape");
 
-  // Settings links to the bundled changelog, and closing it returns to Settings.
-  await page.keyboard.press(process.platform === "darwin" ? "Meta+Comma" : "Control+Comma");
-  await page.getByRole("button", { name: "View changelog" }).click();
-  const summaries = whatsNew.locator("summary");
-  await summaries.first().waitFor();
-  const firstPage = await summaries.allTextContents();
-  assert.equal(firstPage.length, 5);
-  assert.equal(firstPage[0], "Folio " + installed);
-  assert.equal(await whatsNew.locator("details[open]").count(), 1);
-  await summaries.nth(1).click();
-  assert.ok(await whatsNew.locator("details").nth(1).locator("li").first().isVisible());
-  const older = whatsNew.getByRole("button", { name: "Older releases" });
-  const newer = whatsNew.getByRole("button", { name: "Newer releases" });
-  assert.ok(await newer.isDisabled());
-  await older.click();
-  assert.ok(!(await summaries.allTextContents()).some(version => firstPage.includes(version)));
-  await newer.click();
-  assert.deepEqual(await summaries.allTextContents(), firstPage);
-  assert.equal(await whatsNew.getByRole("link", { name: "View releases on GitHub" }).getAttribute("href"),
-    "https://github.com/Forward-Future/folio-releases/releases");
-  await page.keyboard.press("Escape");
-  await page.getByRole("dialog", { name: "Settings" }).waitFor();
-  await page.keyboard.press("Escape");
-  console.log("ok  changelog opens from Settings");
 
   // A text box is saved automatically and comes back, text and all, when the document is opened again.
   // The sample can reopen at the previous reading position. Bring its first page into view so pdf.js builds its editor layer.
@@ -820,7 +789,8 @@ try {
   console.log("ok  organized thumbnails keep each page's shape:", rows.map((r) => `page ${r.page} ${Math.round(r.width)}x${Math.round(r.height)}`).join(", "));
 
   // A Word document opens converted to PDF (by Word, LibreOffice, or Folio itself, whichever the computer has),
-  // and the PDF is saved next to it. Opening the document again reuses that PDF.
+  // and the PDF is saved next to it without touching an unrelated PDF of the same name. When a saved PDF is reused or
+  // reconverted is covered by test-word-files.cjs; converting again here only costs time.
   const folder = mkdtempSync(path.join(tmpdir(), "folio-word-"));
   const docx = path.join(folder, "Quarterly report.docx");
   writeFileSync(docx, await wordDocument("Quarterly report from Word"));
@@ -848,11 +818,8 @@ try {
   const converted = "Quarterly report (2).pdf";
   await openWordDocument(converted);
   assert.deepEqual(readFileSync(neighbor), Buffer.from(sample));
-  await openWordDocument(converted);
   assert.deepEqual(readdirSync(folder).sort(), [converted, "Quarterly report.docx", "Quarterly report.pdf"]);
-  writeFileSync(path.join(folder, converted), Buffer.from(sample));
-  await openWordDocument("Quarterly report (3).pdf");
-  console.log("ok  Word import preserves unrelated neighbors, reuses a verified PDF, and reconverts a replaced copy");
+  console.log("ok  Word import converts next to the document and preserves unrelated neighbors");
 
   // A pasted link fills in Open from URL; nothing is contacted until the user presses Open.
   await page.evaluate(() => {

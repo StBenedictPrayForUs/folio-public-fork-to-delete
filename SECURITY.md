@@ -56,8 +56,7 @@ Folio opens untrusted PDFs, so it's built to keep a malicious document contained
 Known limitations:
 
 - **Builds aren't signed with developer certificates yet.** Windows builds are unsigned and macOS builds are ad-hoc
-  signed (not notarized); the release build signs both automatically once the certificates are added (see
-  [SIGNING.md](SIGNING.md)). Installers are built on GitHub Actions from this repository. Updates are downloaded over
+  signed (not notarized). Updates are downloaded over
   HTTPS from [Forward-Future/folio-releases](https://github.com/Forward-Future/folio-releases) and checked against the
   SHA-512 published with each release, but without a signature the update channel is only as secure as that GitHub
   account. Until Mac builds are signed, Macs don't install updates automatically: Folio announces new versions, which

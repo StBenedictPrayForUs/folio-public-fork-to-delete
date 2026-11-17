@@ -1,27 +1,10 @@
 # Working on Folio (notes for AI coding agents and maintainers)
 
-Folio ships for **Windows, macOS, and Linux from one codebase**. Every change and every release must reach all three.
-
-## Releasing: one way only
-
-- **Release only with `npm run release`** (`-- minor`, `-- major`, `-- --notes "…"` as needed). It bumps the version,
-  pushes the tag, waits for `.github/workflows/release-build.yml` to build and check the Windows, macOS, and Linux
-  installers, then publishes all of them together and verifies the result with `scripts/check-release.mjs`.
-- **Never publish by hand.** Don't run `gh release create`/`upload`, `electron-builder --publish`, or a
-  single-platform `npm run dist:*` and upload the output. A release missing a platform leaves those users behind; the
-  daily **Release check** workflow opens an issue when that happens.
-- For a transient build failure, rerun the failed jobs on the original tag-push run. Once it succeeds,
-  `npm run release -- --publish-only` resumes publication. A source fix on `main` needs a new version and tag.
-- The release must start at the latest `main` (the script checks). It pushes to `main` by name, so it works from a
-  worktree on any branch, e.g. `git worktree add ../folio-release origin/main`. If the run stops after the tag is
-  pushed (a closed terminal, a restarted session), run `npm run release -- --publish-only` to finish it.
-- **One release at a time.** Releases are built from committed, pushed code. If another session is working in the same
-  checkout, coordinate: don't commit or release its uncommitted work, and use a separate `git worktree` for your own.
+This is a personal fork of [Forward-Future/folio](https://github.com/Forward-Future/folio), used on Windows. GitHub
+is only a backup: there is no CI and no release pipeline. To build the app locally, run `npm run dist:win`.
 
 ## Keeping every platform working
 
-- CI (`.github/workflows/ci.yml`) builds and runs `npm run smoke` on Windows, macOS, and Linux for every push to `main`
-  and every pull request. Keep it green on all three before releasing.
 - Platform differences live in a few places; check them when you touch related code:
   - `electron/main.cjs`: window chrome (`titleBarOverlay` on Windows/Linux, traffic lights on macOS), file opening
     (argv on Windows/Linux, `open-file` on macOS), install kinds and update behavior (`installKind`, `NOTIFY_ONLY`).
@@ -29,17 +12,11 @@ Folio ships for **Windows, macOS, and Linux from one codebase**. Every change an
   - `package.json` `build.win` / `build.mac` / `build.linux`, `build/linux/*.tpl` (the .deb's install scripts).
 - Paths shown to users differ per OS; don't hard-code Windows paths or "Explorer" in UI or docs.
 
-## How each platform gets updates
+## Updates
 
-| Install | Update path |
-| --- | --- |
-| Windows installer | electron-updater reads `latest.yml`, installs silently |
-| Windows portable | none (download again) |
-| macOS | electron-updater reads `latest-mac.yml`; installs itself only when built with the Developer ID secrets (see SIGNING.md), otherwise shows a download link |
-| Linux AppImage | electron-updater reads `latest-linux.yml`, replaces itself |
-| Linux .deb | apt: the package adds Folio's signed repository (`Packages`/`InRelease` on each release, signed with the `APT_SIGNING_KEY` secret) |
-
-All of these files are produced by the release build and published together; `scripts/check-release.mjs` lists them.
+Installed copies (not portable ones) check upstream's releases at
+[Forward-Future/folio-releases](https://github.com/Forward-Future/folio-releases) through electron-updater, using
+`publish` in `package.json` and the auto-update code in `electron/main.cjs`.
 
 ## Pull requests
 
@@ -55,8 +32,17 @@ All of these files are produced by the release build and published together; `sc
 
 ## Code style
 
-Match the surrounding code: comments explain why, not what; user-facing text is plain and short. Run
-`npx tsc --noEmit`, `npm run build`, and `npm run smoke` before committing.
+Match the surrounding code: comments explain why, not what; user-facing text is plain and short.
+
+## Testing
+
+- **Every change:** `npm test` (vitest plus the Node-only `scripts/test-*` checks, about 10 seconds) and
+  `npm run build`, which type-checks.
+- **Changes to how the running app behaves** (UI, Electron main process, saving, printing, OCR): also `npm run smoke`.
+  It runs the Electron smoke tests in parallel and takes about two minutes, so skip it for changes that can't affect
+  the running app (docs, unit-tested pure logic, release scripts).
+- Put new checks in the fastest place that can catch the bug: a vitest or `node --test` unit test first. Add to the
+  smoke test only for behavior that needs the real app, and don't repeat there what a unit test already covers.
 
 To check a change in the running app, use `npm run smoke` (extend it if it doesn't cover your change). It runs Folio
 without a visible window (off-screen on Windows and Linux, never shown on macOS) and leaves the clipboard alone, so it
