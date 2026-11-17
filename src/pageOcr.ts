@@ -24,12 +24,16 @@ async function hasPageImage(page: PDFPageProxy) {
 /** Path numbers (coordinates and drawing codes) above this mean a page draws more than rules and boxes:
  * letters drawn as outlines take thousands even for a few lines, while a ruled form takes a few hundred. */
 export const VECTOR_TEXT_PATH_DATA = 1500;
+/** ...and it must outweigh the page's real text by far: an outlined letter takes about 80 path numbers, so a page whose
+ * drawing is mostly letters has hundreds of times more path data than real characters. A typed page with boxes or a
+ * table (Folio's sample: 154 characters, about 4,500 path numbers) stays below this. */
+export const PATH_DATA_PER_TEXT_CHAR = 60;
 
-/** How much path data a page draws, counted from pdf.js's operator list. */
-async function pathData(page: PDFPageProxy) {
+/** How much path data a page draws, counted from pdf.js's operator list, up to `limit`. */
+async function pathData(page: PDFPageProxy, limit: number) {
   const { fnArray, argsArray } = await page.getOperatorList({ annotationMode: AnnotationMode.DISABLE });
   let total = 0;
-  for (let i = 0; i < fnArray.length && total < VECTOR_TEXT_PATH_DATA; i++) {
+  for (let i = 0; i < fnArray.length && total < limit; i++) {
     if (fnArray[i] !== OPS.constructPath) continue;
     // [paint operator, [path data], bounds]; older pdf.js passed the path's operators and arguments separately.
     const data = (argsArray[i] as unknown[])?.[1] as ArrayLike<unknown> | undefined;
@@ -39,13 +43,24 @@ async function pathData(page: PDFPageProxy) {
   return total;
 }
 
-async function readWords(page: PDFPageProxy, worker: OcrWorker, signal: AbortSignal, dpi = 216): Promise<ReturnType<typeof toItems>> {
+/** A page whose words average below this confidence read poorly (often sideways); it is read again when the reader turns the pages. */
+export const WEAK_READING = 70;
+
+/** How well a page read: the sum and mean of its words' confidence. `known` is false for readings saved before Folio kept confidence. */
+export function readingOf(items: readonly unknown[]) {
+  const scores = (items as TextItem[]).flatMap(item => typeof item.confidence === "number" ? [item.confidence] : []);
+  const total = scores.reduce((sum, score) => sum + score, 0);
+  return { total, mean: scores.length ? total / scores.length : 0, known: scores.length > 0 || !items.length };
+}
+
+async function readWords(page: PDFPageProxy, worker: OcrWorker, signal: AbortSignal, dpi = 216, rotation = 0): Promise<ReturnType<typeof toItems>> {
   signal.throwIfAborted();
   // Read at a consistent resolution even in fit-page mode. Bound both dimensions on oversized scans.
   // (216 DPI is scale 3: the usual reading for scans. Pages of outlined letters get 300 DPI; they render without noise.)
   const base = page.getViewport({ scale: 1 });
   const scale = Math.min(dpi / 72, (dpi > 216 ? 3400 : 2400) / Math.max(base.width, base.height));
-  const viewport = page.getViewport({ scale });
+  // Read the page the way the reader has turned it: Tesseract only reads upright text.
+  const viewport = page.getViewport({ scale, rotation: (page.rotate + rotation) % 360 });
   const canvas = document.createElement("canvas");
   canvas.width = Math.ceil(viewport.width);
   canvas.height = Math.ceil(viewport.height);
@@ -118,6 +133,21 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, language
   let worker: Promise<OcrWorker> | undefined;
   let workerStartFailed = false;
   let missingPackMessage: string | undefined;
+  /** The page rotation each page was last read at, and pages queued to be read again at the current one. */
+  const readAt = new Map<number, number>();
+  const rereads = new Set<number>();
+  /** Queue a page to be read again at the current rotation if its last reading was poor. */
+  function rereadIfWeak(n: number) {
+    const session = ocrSession(pdf);
+    if (!session || session.embedded.has(n) || readAt.get(n) === viewer.pagesRotation) return false;
+    const items = session.pages.get(n);
+    const reading = items && readingOf(items);
+    if (!(reading ? reading.known && reading.mean < WEAK_READING : notices.get(n) === "noWords")) return false;
+    if (items) rereads.add(n);
+    else notices.delete(n);
+    if (n !== active) pending.add(n);
+    return true;
+  }
 
   function updateStatus() {
     const n = viewer.currentPageNumber;
@@ -154,8 +184,12 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, language
       page = await pdf.getPage(n);
       signal.throwIfAborted();
       const session = ocrSession(pdf);
-      if (session?.pages.has(n) || session?.embedded.has(n)) return;
-      const native = await sparseNativeText(page, signal);
+      const again = rereads.delete(n);
+      if (session?.embedded.has(n) || (session?.pages.has(n) && !again)) return;
+      const rotation = viewer.pagesRotation;
+      // Read again: judge the page by its own text, not the words recognized on it last time.
+      const native = again && session ? await session.withoutRecognized(n, () => sparseNativeText(page!, signal))
+        : await sparseNativeText(page, signal);
       if (!native) return;
       signal.throwIfAborted();
       const sparse = textCover(native, page.view as Box) < SCAN_TEXT_COVER;
@@ -163,7 +197,9 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, language
       if (!(await hasPageImage(page))) {
         // No picture, so not a scan. But some PDFs draw their letters as shapes instead of text (a "print to PDF"
         // that outlined its fonts): little or no real text and a lot of drawing means words to read.
-        if (!sparse || await pathData(page) < VECTOR_TEXT_PATH_DATA) return;
+        const chars = native.reduce((sum, item) => sum + item.str.trim().length, 0);
+        const needed = Math.max(VECTOR_TEXT_PATH_DATA, PATH_DATA_PER_TEXT_CHAR * chars);
+        if (!sparse || await pathData(page, needed) < needed) return;
         outlined = true;
       }
       const scan = outlined || await isScanLike(native.length, textCover(native, page.view as Box), async () => {
@@ -179,10 +215,19 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, language
       recognizing = true;
       if (n === viewer.currentPageNumber) updateStatus();
       worker ??= startOcrWorker(signal, languages).catch(error => { workerStartFailed = true; missingPackMessage = error instanceof MissingScanPack ? error.message : undefined; throw error; });
-      const items = await readWords(page, await worker, signal, outlined ? 300 : 216);
+      const items = await readWords(page, await worker, signal, outlined ? 300 : 216, rotation);
       const newItems = dropDuplicates(items, native.map(boxOf));
       signal.throwIfAborted();
-      if (newItems.length && session) {
+      readAt.set(n, rotation);
+      if (again && session?.pages.has(n)) {
+        // Keep whichever reading is better; the page's text layer is rebuilt either way.
+        if (readingOf(newItems).total > readingOf(session.pages.get(n)!).total) session.replace(n, newItems);
+        if (view.renderingState !== 0) {
+          view.reset({ keepAnnotationLayer: true, keepAnnotationEditorLayer: true, keepCanvasWrapper: true });
+          viewer.update();
+        }
+      } else if (newItems.length && session) {
+        notices.delete(n);
         session.record(n, newItems);
         // Rebuild through pdf.js so its text spans and find-highlighter map stay in sync.
         if (view.renderingState !== 0) {
@@ -200,6 +245,8 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, language
     } finally {
       active = 0;
       recognizing = false;
+      // The reader turned the pages while this one was being read.
+      if (!signal.aborted && readAt.has(n) && readAt.get(n) !== viewer.pagesRotation) rereadIfWeak(n);
       if (!signal.aborted) {
         // Background renders aren't in the viewer's page buffer, so it won't release their images for us.
         if (!viewer.getCachedPageViews().has(view)) page?.cleanup();
@@ -230,6 +277,18 @@ export function recognizeScannedPages(bus: EventBus, viewer: PDFViewer, language
     }
     updateStatus();
     schedule();
+  }, { signal });
+  // Turning the pages (the R key or the rotate button) reads poorly read pages again the new way up. Pages that read
+  // well are left alone, so an upright document costs nothing; a sideways one is read once more, a page at a time.
+  bus.on("rotationchanging", ({ pagesRotation }: { pagesRotation: number }) => {
+    if (pagesRotation !== viewer.pagesRotation) return;
+    for (let n = 1; n <= pdf.numPages; n++) rereadIfWeak(n);
+    if (pending.size) {
+      nextPage = viewer.currentPageNumber;
+      onPhase("running");
+      updateStatus();
+      schedule();
+    }
   }, { signal });
   window.addEventListener("folio:tab-visibility", schedule, { signal });
   const stop = () => {

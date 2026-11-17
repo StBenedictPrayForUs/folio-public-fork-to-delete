@@ -65,7 +65,7 @@ export function toItems(lines: Line[], viewport: { convertToPdfPoint(x: number, 
       const size = sizePx * (length / (x1 - x0));
       items.push({ str: last ? word.text : word.text + " ", dir: "ltr", fontName: "ocr", hasEOL: last,
         transform: [ux * size, uy * size, -uy * size, ux * size, ax, ay], width: length, height: size,
-        inkWidth: (length * (word.bbox.x1 - x0)) / (x1 - x0) });
+        inkWidth: (length * (word.bbox.x1 - x0)) / (x1 - x0), confidence: word.confidence });
     });
   }
   return items;

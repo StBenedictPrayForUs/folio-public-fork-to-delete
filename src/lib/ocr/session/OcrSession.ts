@@ -24,6 +24,8 @@ export class OcrSession {
   #destroyed = false;
   #languages: ScanLanguage[];
   #generation = 0;
+  /** Pages being read again: their recognized words stay out of the page text until the new reading is in. */
+  #hidden = new Set<number>();
   /** `key` is the document's content id; without one (password-protected files) results stay in memory only. */
   constructor(pdf: PDFDocumentProxy, key: string | null, languages: ScanLanguage[] = ["eng"]) {
     this.pdf = pdf;
@@ -40,7 +42,7 @@ export class OcrSession {
         patched.add(page);
         const original = page.streamTextContent.bind(page) as () => ReadableStream;
         page.streamTextContent = ((params?: object) => {
-          const items = this.pages.get(n);
+          const items = this.#hidden.has(n) ? undefined : this.pages.get(n);
           const source = (original as (p?: object) => ReadableStream)(params);
           // The PDF's own text (a stamp, a header) stays; recognized words follow it.
           return items?.length ? withRecognized(source, items, STYLES) : source;
@@ -64,6 +66,19 @@ export class OcrSession {
     for (const listener of this.#pageListeners) listener(page);
   }
 
+  /** Runs `read` against the page's own text only, without the words recognized on it. */
+  async withoutRecognized<T>(page: number, read: () => Promise<T>): Promise<T> {
+    this.#hidden.add(page);
+    try { return await read(); } finally { this.#hidden.delete(page); }
+  }
+  /** Swap a page's recognized text for a better reading (the page was read again after the reader turned it). */
+  replace(page: number, items: unknown[]) {
+    if (this.#destroyed || !items.length || this.embedded.has(page)) return;
+    this.pages.set(page, items);
+    if (this.#key) void saveOcrPage(this.#key, page, items, this.#epoch, this.#languages);
+    this.version++;
+    for (const listener of this.#pageListeners) listener(page);
+  }
   /** Brings back pages recognized in an earlier session. Call before the document is shown. */
   async restore() {
     const generation = this.#generation;

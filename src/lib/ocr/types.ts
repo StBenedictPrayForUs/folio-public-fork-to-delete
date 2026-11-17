@@ -11,6 +11,8 @@ export interface TextItem {
   hasEOL: boolean;
   /** Recognized words only: the width of the word's own ink, before `width` was stretched over the gap that follows it. */
   inkWidth?: number;
+  /** Recognized words only: Tesseract's confidence (0–100), used to judge whether a page read well. */
+  confidence?: number;
 }
 
 /** Left, bottom, right, top in page space. */

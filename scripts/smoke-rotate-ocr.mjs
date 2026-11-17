@@ -10,7 +10,7 @@ import { readerPage } from "./reader-page.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
-const { PDFDocument, rgb } = require("pdf-lib");
+const { PDFDocument, StandardFonts, rgb } = require("pdf-lib");
 const fontkit = require("@pdf-lib/fontkit");
 
 /** A page whose letters are drawn as filled outlines, with no text in the PDF at all (like a print with outlined fonts). */
@@ -18,6 +18,8 @@ async function outlinedLettersPdf(lines) {
   const font = fontkit.create(readFileSync(require.resolve("dejavu-fonts-ttf/ttf/DejaVuSans.ttf")));
   const pdf = await PDFDocument.create();
   const page = pdf.addPage([612, 792]);
+  // A fax machine's header line is often real text, even when the page itself is outlined.
+  page.drawText("FAX 11/16 2:14PM 555-0100 P.1", { x: 72, y: 760, size: 8, font: await pdf.embedFont(StandardFonts.Helvetica) });
   const size = 14, scale = size / font.unitsPerEm;
   lines.forEach((line, row) => {
     let x = 72;
@@ -48,30 +50,54 @@ try {
     const task = pdfjsLib.getDocument({ data: Uint8Array.from(bytes) });
     try { return (await (await (await task.promise).getPage(1)).getTextContent()).items.length; }
     finally { await task.destroy(); }
-  }, [...outlined]), 0, "the test page has no embedded text");
+  }, [...outlined]), 1, "the test page's only embedded text is its fax header");
   await page.locator('.page[data-page-number="1"] .textLayer').getByText(/OXYGEN/).waitFor({ timeout: 90_000 });
   const words = (await page.locator('.page[data-page-number="1"] .textLayer').innerText()).replace(/\s+/g, " ");
   assert.match(words, /Liquid oxygen two liters per minute Signed by the physician on file/);
   console.log("ok  letters drawn as outlines are recognized");
 
-  // Two scanned pages: one upright, one whose text runs bottom to top (it needs a clockwise turn).
-  const scans = await page.evaluate(() => [false, true].map(sideways => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 1700; canvas.height = 2200;
-    const g = canvas.getContext("2d");
-    g.fillStyle = "#fff"; g.fillRect(0, 0, canvas.width, canvas.height);
-    g.fillStyle = "#000"; g.font = "bold 64px Arial";
-    if (sideways) { g.translate(0, canvas.height); g.rotate(-Math.PI / 2); }
-    const lines = sideways ? ["SIDEWAYS ORDER FORM", "Liquid oxygen refill", "Signature on file"] : ["FAX COVER SHEET", "Referral for oxygen", "Please review"];
-    lines.forEach((line, i) => g.fillText(line, 160, 220 + i * 110));
-    return canvas.toDataURL("image/png");
-  }));
-  const pdf = await PDFDocument.create();
-  for (const url of scans) {
-    const image = await pdf.embedPng(Buffer.from(url.split(",")[1], "base64"));
-    pdf.addPage([612, 792]).drawImage(image, { x: 0, y: 0, width: 612, height: 792 });
-  }
-  const bytes = Buffer.from(await pdf.save());
+  // Scanned pages; a sideways one has text running bottom to top (it needs a clockwise turn).
+  const scanPdf = async layout => {
+    const scans = await page.evaluate(layout => layout.map(([sideways, lines]) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 1700; canvas.height = 2200;
+      const g = canvas.getContext("2d");
+      g.fillStyle = "#fff"; g.fillRect(0, 0, canvas.width, canvas.height);
+      g.fillStyle = "#000"; g.font = "bold 64px Arial";
+      if (sideways) { g.translate(0, canvas.height); g.rotate(-Math.PI / 2); }
+      lines.forEach((line, i) => g.fillText(line, 160, 220 + i * 110));
+      return canvas.toDataURL("image/png");
+    }), layout);
+    const pdf = await PDFDocument.create();
+    for (const url of scans) {
+      const image = await pdf.embedPng(Buffer.from(url.split(",")[1], "base64"));
+      pdf.addPage([612, 792]).drawImage(image, { x: 0, y: 0, width: 612, height: 792 });
+    }
+    return Buffer.from(await pdf.save());
+  };
+  const open = (name, data) => app.evaluate(({ BrowserWindow }, { name, data }) => BrowserWindow.getAllWindows()[0].webContents.send(
+    "folio:open-file", { name, data: Buffer.from(data) }), { name, data: [...data] });
+
+  // A document that is sideways throughout: turning the view (R) reads its poorly read pages again the right way up.
+  await open("All sideways.pdf", await scanPdf([[true, ["OXYGEN DELIVERY TICKET", "Two cylinders delivered"]], [true, ["PHYSICIAN ORDER FORM", "Continuous oxygen at night"]]]));
+  await page.window.waitForFunction(() => document.title.startsWith("All sideways.pdf"));
+  // The first reading of page 1 is done: it found nothing, or only a few unsure words.
+  await page.waitForFunction(() => /No readable text/.test(document.querySelector(".page-text-status")?.textContent ?? "")
+    || !!document.querySelector('.page[data-page-number="1"] .textLayer.ocr-text'), null, { timeout: 90_000 });
+  assert.doesNotMatch(await page.locator(".pdfViewer").innerText(), /DELIVERY TICKET/, "a sideways page doesn't read before it is turned");
+  await page.getByTitle("Rotate (R)").click();
+  await page.locator('.page[data-page-number="1"] .textLayer').getByText(/DELIVERY/).waitFor({ timeout: 90_000 });
+  await page.locator('.page[data-page-number="2"]').scrollIntoViewIfNeeded();
+  await page.locator('.page[data-page-number="2"] .textLayer').getByText(/PHYSICIAN/).waitFor({ timeout: 90_000 });
+  // Search finds the new words.
+  await page.getByRole("button", { name: /^Search/ }).click();
+  await page.getByLabel("Find in document").fill("cylinders");
+  await page.locator(".search-result-list mark").first().waitFor({ timeout: 30_000 });
+  await page.getByLabel("Find in document").press("Escape");
+  console.log("ok  turning a sideways document reads its pages again the right way up");
+
+  // Two scanned pages: one upright, one sideways.
+  const bytes = await scanPdf([[false, ["FAX COVER SHEET", "Referral for oxygen", "Please review"]], [true, ["SIDEWAYS ORDER FORM", "Liquid oxygen refill", "Signature on file"]]]);
   await app.evaluate(({ BrowserWindow }, data) => BrowserWindow.getAllWindows()[0].webContents.send(
     "folio:open-file", { name: "Sideways fax.pdf", data: Buffer.from(data), path: String.raw`C:\Faxes\Sideways fax.pdf` }), [...bytes]);
   await page.window.waitForFunction(() => document.title.startsWith("Sideways fax.pdf"));
